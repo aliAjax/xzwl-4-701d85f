@@ -299,6 +299,7 @@ async def confirm_reservation(
         start_date=reservation.start_date,
         end_date=reservation.end_date,
         purpose=f"reservation-{reservation.reservation_number}",
+        exclude_reservation_id=reservation.id,
     )
 
     if not locked:

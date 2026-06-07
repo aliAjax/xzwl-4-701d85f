@@ -228,6 +228,7 @@ class DeviceLockService:
         start_date: datetime,
         end_date: datetime,
         purpose: str = "reservation",
+        exclude_reservation_id: Optional[int] = None,
     ) -> tuple[bool, Optional[str], List[str], Optional[List[DeviceLock]]]:
         self.db.begin_nested()
         try:
@@ -248,7 +249,7 @@ class DeviceLockService:
                     continue
 
                 from ..models.reservation import Reservation
-                if Reservation.check_time_conflict(self.db, device_id, start_date, end_date):
+                if Reservation.check_time_conflict(self.db, device_id, start_date, end_date, exclude_reservation_id):
                     errors.append(f"Device {device.serial_number} has a conflicting reservation in this time period")
                     continue
 
