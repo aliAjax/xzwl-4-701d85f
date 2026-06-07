@@ -1,0 +1,11 @@
+from .auth import router as auth_router
+from .users import router as users_router
+from .devices import router as devices_router
+from .categories import router as categories_router
+from .contracts import router as contracts_router
+from .disinfection import router as disinfection_router
+from .maintenance import router as maintenance_router
+from .repairs import router as repairs_router
+from .deposits import router as deposits_router
+from .locking import router as locking_router
+from .audit import router as audit_router
