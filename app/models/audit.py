@@ -25,6 +25,9 @@ class AuditAction(str, enum.Enum):
     DEPOSIT_PAY = "deposit_pay"
     DEPOSIT_REFUND = "deposit_refund"
     OVERDUE = "overdue"
+    RESERVE = "reserve"
+    RESERVATION_CONFIRM = "reservation_confirm"
+    RESERVATION_CANCEL = "reservation_cancel"
 
 
 class AuditLog(Base):

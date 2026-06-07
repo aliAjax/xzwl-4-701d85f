@@ -19,6 +19,7 @@ from .routers import (
     deposits_router,
     locking_router,
     audit_router,
+    reservations_router,
 )
 from .models.contract import Contract, ContractStatus
 from .models.device import DeviceStatus
@@ -51,6 +52,7 @@ app.include_router(repairs_router)
 app.include_router(deposits_router)
 app.include_router(locking_router)
 app.include_router(audit_router)
+app.include_router(reservations_router)
 
 
 @app.middleware("http")

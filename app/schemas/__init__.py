@@ -25,3 +25,10 @@ from .repair import RepairRecordCreate, RepairRecordUpdate, RepairRecordResponse
 from .deposit import DepositCreate, DepositUpdate, DepositResponse, DepositRefundRequest
 from .audit import AuditLogResponse
 from .locking import LockDevicesRequest, LockResponse, UnlockDevicesRequest, DeviceLockResponse
+from .reservation import (
+    ReservationCreate,
+    ReservationUpdate,
+    ReservationResponse,
+    ReservationStatusUpdate,
+    ReservationCancelRequest,
+)

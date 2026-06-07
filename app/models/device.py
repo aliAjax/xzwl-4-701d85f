@@ -62,6 +62,7 @@ class Device(Base):
     maintenance_records = relationship("MaintenanceRecord", back_populates="device")
     repair_records = relationship("RepairRecord", back_populates="device")
     device_locks = relationship("DeviceLock", back_populates="device")
+    reservations = relationship("Reservation", back_populates="device")
 
     def is_available_for_rent(self) -> bool:
         if self.status in [DeviceStatus.MAINTENANCE, DeviceStatus.REPAIR, DeviceStatus.RETIRED]:

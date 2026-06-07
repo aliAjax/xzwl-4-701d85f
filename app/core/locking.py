@@ -220,3 +220,84 @@ class DeviceLockService:
             )
             .all()
         )
+
+    def lock_devices_for_reservation(
+        self,
+        device_ids: List[int],
+        user: User,
+        start_date: datetime,
+        end_date: datetime,
+        purpose: str = "reservation",
+    ) -> tuple[bool, Optional[str], List[str], Optional[List[DeviceLock]]]:
+        self.db.begin_nested()
+        try:
+            self._cleanup_expired_locks()
+            now = datetime.now(timezone.utc)
+            lock_token = str(uuid.uuid4())
+            errors = []
+            created_locks = []
+
+            for device_id in device_ids:
+                device = self.db.query(Device).filter(Device.id == device_id).first()
+                if not device:
+                    errors.append(f"Device {device_id} not found")
+                    continue
+
+                if not device.is_available_for_rent():
+                    errors.append(f"Device {device.serial_number} is not available for rent")
+                    continue
+
+                from ..models.reservation import Reservation
+                if Reservation.check_time_conflict(self.db, device_id, start_date, end_date):
+                    errors.append(f"Device {device.serial_number} has a conflicting reservation in this time period")
+                    continue
+
+                existing_lock = self.get_active_lock(device_id)
+                if existing_lock and existing_lock.user_id != user.id:
+                    errors.append(f"Device {device.serial_number} is locked by another user")
+                    continue
+
+            if errors:
+                self.db.rollback()
+                return False, None, errors, None
+
+            for device_id in device_ids:
+                existing_lock = self.get_active_lock(device_id)
+                if existing_lock and existing_lock.user_id == user.id:
+                    existing_lock.expires_at = end_date
+                    existing_lock.lock_token = lock_token
+                    existing_lock.purpose = purpose
+                    created_locks.append(existing_lock)
+                else:
+                    lock = DeviceLock(
+                        device_id=device_id,
+                        user_id=user.id,
+                        lock_token=lock_token,
+                        locked_at=now,
+                        expires_at=end_date,
+                        purpose=purpose,
+                        is_active=1,
+                    )
+                    self.db.add(lock)
+                    created_locks.append(lock)
+
+            self.db.commit()
+            for lock in created_locks:
+                self.db.refresh(lock)
+            return True, lock_token, [], created_locks
+        except Exception as e:
+            self.db.rollback()
+            raise e
+
+    def get_lock_by_token(self, lock_token: str) -> Optional[DeviceLock]:
+        self._cleanup_expired_locks()
+        now = datetime.now(timezone.utc)
+        return (
+            self.db.query(DeviceLock)
+            .filter(
+                DeviceLock.lock_token == lock_token,
+                DeviceLock.is_active == 1,
+                DeviceLock.expires_at > now,
+            )
+            .first()
+        )

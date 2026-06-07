@@ -9,3 +9,4 @@ from .repairs import router as repairs_router
 from .deposits import router as deposits_router
 from .locking import router as locking_router
 from .audit import router as audit_router
+from .reservations import router as reservations_router
