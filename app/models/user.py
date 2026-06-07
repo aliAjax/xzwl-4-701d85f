@@ -36,3 +36,4 @@ class User(Base):
     audit_logs = relationship("AuditLog", back_populates="user")
     created_contracts = relationship("Contract", foreign_keys="Contract.created_by_id", back_populates="created_by_user")
     reservations = relationship("Reservation", foreign_keys="Reservation.customer_id", back_populates="customer")
+    credit_notes = relationship("CustomerCreditNote", foreign_keys="CustomerCreditNote.customer_id", back_populates="customer")

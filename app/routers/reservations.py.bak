@@ -19,8 +19,6 @@ from ..schemas import (
     APIResponse,
     PaginatedResponse,
 )
-from ..routers.customer_credit_notes import get_customer_risk_summary_sync
-from ..schemas.customer_credit_note import CustomerRiskSummary
 from ..core import (
     get_current_active_user,
     require_role,
@@ -328,15 +326,7 @@ async def confirm_reservation(
         ip_address=request.client.host if request.client else None,
     )
 
-    message = "Reservation confirmed successfully"
-    data = get_reservation_dict(reservation)
-
-    risk_summary = get_customer_risk_summary_sync(db, reservation.customer_id)
-    if risk_summary:
-        message = f"Reservation confirmed successfully. Customer has {risk_summary.total_active_notes} active risk note(s)."
-        data["customer_risk_summary"] = risk_summary.model_dump()
-
-    return APIResponse(message=message, data=data)
+    return APIResponse(message="Reservation confirmed successfully", data=get_reservation_dict(reservation))
 
 
 @router.post("/{reservation_id}/cancel", response_model=APIResponse[ReservationResponse])

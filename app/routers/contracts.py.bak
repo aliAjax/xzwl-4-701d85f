@@ -20,8 +20,6 @@ from ..schemas import (
     APIResponse,
     PaginatedResponse,
 )
-from ..routers.customer_credit_notes import get_customer_risk_summary_sync
-from ..schemas.customer_credit_note import CustomerRiskSummary
 from ..core import (
     get_current_active_user,
     require_role,
@@ -205,16 +203,7 @@ async def create_contract(
         ip_address=request.client.host if request.client else None,
     )
 
-    message = "Contract created successfully"
-    data = get_contract_dict(new_contract)
-
-    if current_user.role in [UserRole.ADMIN, UserRole.STAFF]:
-        risk_summary = get_customer_risk_summary_sync(db, contract_data.customer_id)
-        if risk_summary:
-            message = f"Contract created successfully. Customer has {risk_summary.total_active_notes} active risk note(s)."
-            data["customer_risk_summary"] = risk_summary.model_dump()
-
-    return APIResponse(message=message, data=data)
+    return APIResponse(message="Contract created successfully", data=get_contract_dict(new_contract))
 
 
 @router.patch("/{contract_id}/status", response_model=APIResponse[ContractResponse])
