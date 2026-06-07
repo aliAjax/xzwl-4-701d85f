@@ -3,6 +3,7 @@ from .users import router as users_router
 from .devices import router as devices_router
 from .categories import router as categories_router
 from .contracts import router as contracts_router
+from .contract_reminders import router as contract_reminders_router
 from .disinfection import router as disinfection_router
 from .maintenance import router as maintenance_router
 from .repairs import router as repairs_router

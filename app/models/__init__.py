@@ -1,6 +1,7 @@
 from .user import User, UserRole
 from .device import Device, DeviceCategory, DeviceStatus
 from .contract import Contract, ContractItem, ContractStatus
+from .contract_reminder import ContractReminder, ReminderStatus
 from .disinfection import DisinfectionRecord
 from .maintenance import MaintenanceRecord
 from .repair import RepairRecord

@@ -97,7 +97,8 @@ class AuditLogger:
             **kwargs,
         )
 
-    def log_status_change(self, resource_type: str, resource_id: str, user: User, old_status: str, new_status: str, **kwargs) -> AuditLog:
+    def log_status_change(self, resource_type: str, resource_id: str, user: User, old_status: str, new_status: str, description: Optional[str] = None, **kwargs) -> AuditLog:
+        desc = description or f"Status changed from {old_status} to {new_status}"
         return self.log(
             action=AuditAction.STATUS_CHANGE,
             resource_type=resource_type,
@@ -105,7 +106,7 @@ class AuditLogger:
             user=user,
             old_values={"status": old_status},
             new_values={"status": new_status},
-            description=f"Status changed from {old_status} to {new_status}",
+            description=desc,
             **kwargs,
         )
 

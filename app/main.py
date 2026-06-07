@@ -13,6 +13,7 @@ from .routers import (
     devices_router,
     categories_router,
     contracts_router,
+    contract_reminders_router,
     disinfection_router,
     maintenance_router,
     repairs_router,
@@ -48,6 +49,7 @@ app.include_router(users_router)
 app.include_router(devices_router)
 app.include_router(categories_router)
 app.include_router(contracts_router)
+app.include_router(contract_reminders_router)
 app.include_router(disinfection_router)
 app.include_router(maintenance_router)
 app.include_router(repairs_router)

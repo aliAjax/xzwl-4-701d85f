@@ -19,6 +19,12 @@ from .contract import (
     RenewContractRequest,
     ReturnContractRequest,
 )
+from .contract_reminder import (
+    ContractExpiryResponse,
+    ContractReminderCreate,
+    ContractReminderUpdateStatus,
+    ContractReminderResponse,
+)
 from .disinfection import DisinfectionRecordCreate, DisinfectionRecordUpdate, DisinfectionRecordResponse
 from .maintenance import MaintenanceRecordCreate, MaintenanceRecordUpdate, MaintenanceRecordResponse
 from .repair import RepairRecordCreate, RepairRecordUpdate, RepairRecordResponse, RepairStatusUpdate
