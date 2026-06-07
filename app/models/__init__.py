@@ -9,3 +9,4 @@ from .audit import AuditLog, AuditAction
 from .device_lock import DeviceLock
 from .reservation import Reservation, ReservationStatus
 from .quotation import Quotation, QuotationItem, QuotationStatus
+from .device_transfer import DeviceTransfer, TransferLocationType, TransferStatus

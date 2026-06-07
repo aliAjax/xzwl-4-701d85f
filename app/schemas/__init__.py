@@ -40,3 +40,9 @@ from .quotation import (
     QuotationStatusUpdate,
     QuotationVoidRequest,
 )
+from .device_transfer import (
+    DeviceTransferCreate,
+    DeviceTransferConfirm,
+    DeviceTransferCancel,
+    DeviceTransferResponse,
+)

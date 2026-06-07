@@ -11,3 +11,4 @@ from .locking import router as locking_router
 from .audit import router as audit_router
 from .reservations import router as reservations_router
 from .quotations import router as quotations_router
+from .device_transfers import router as device_transfers_router
