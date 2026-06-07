@@ -5,6 +5,7 @@ from datetime import datetime
 from ..models.reservation import ReservationStatus
 from .user import UserResponse
 from .device import DeviceResponse
+from .customer_credit_note import CustomerRiskSummary
 
 
 class ReservationBase(BaseModel):
@@ -57,6 +58,7 @@ class ReservationResponse(BaseModel):
     device: Optional[DeviceResponse] = None
     created_at: datetime
     updated_at: Optional[datetime]
+    customer_risk_summary: Optional[CustomerRiskSummary] = None
 
     class Config:
         from_attributes = True

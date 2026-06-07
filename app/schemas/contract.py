@@ -3,6 +3,7 @@ from typing import Optional, List
 from datetime import datetime, timedelta
 
 from ..models.contract import ContractStatus
+from .customer_credit_note import CustomerRiskSummary
 
 
 class ContractItemBase(BaseModel):
@@ -89,6 +90,7 @@ class ContractResponse(BaseModel):
     items: List[ContractItemResponse] = []
     created_at: datetime
     updated_at: Optional[datetime]
+    customer_risk_summary: Optional[CustomerRiskSummary] = None
 
     class Config:
         from_attributes = True
