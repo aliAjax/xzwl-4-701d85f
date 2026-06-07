@@ -28,6 +28,8 @@ class AuditAction(str, enum.Enum):
     RESERVE = "reserve"
     RESERVATION_CONFIRM = "reservation_confirm"
     RESERVATION_CANCEL = "reservation_cancel"
+    QUOTE_CREATE = "quote_create"
+    QUOTE_VOID = "quote_void"
 
 
 class AuditLog(Base):
