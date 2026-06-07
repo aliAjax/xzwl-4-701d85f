@@ -319,8 +319,12 @@ async def update_reminder_status(
 
     if status_data.notes:
         reminder.notes = status_data.notes
-    if status_data.follow_up_date:
-        reminder.follow_up_date = status_data.follow_up_date
+
+    if status_data.status == ReminderStatus.FOLLOW_UP_LATER:
+        if status_data.follow_up_date:
+            reminder.follow_up_date = status_data.follow_up_date
+    else:
+        reminder.follow_up_date = None
 
     db.commit()
     db.refresh(reminder)
