@@ -1,4 +1,5 @@
 from fastapi import APIRouter, Depends, HTTPException, status, Request
+from sqlalchemy import and_, or_
 from sqlalchemy.orm import Session
 from typing import Optional
 from math import ceil
@@ -10,6 +11,7 @@ from ..models.user import User, UserRole
 from ..models.device import DeviceCategory, Device, DeviceStatus
 from ..models.quotation import Quotation, QuotationItem, QuotationStatus
 from ..models.contract import Contract, ContractItem, ContractStatus
+from ..models.inventory_commitment import InventoryCommitment, CommitmentStatus
 from ..schemas import (
     QuotationCreate,
     QuotationUpdate,
@@ -502,6 +504,10 @@ async def convert_quotation_to_contract(
                 .filter(
                     ContractItem.device_id == device_id,
                     Contract.status.in_([ContractStatus.ACTIVE, ContractStatus.RENEWED, ContractStatus.OVERDUE]),
+                    or_(
+                        and_(Contract.start_date < end_date, Contract.end_date > convert_data.start_date),
+                        and_(convert_data.start_date < Contract.end_date, end_date > Contract.start_date),
+                    ),
                 )
                 .first()
             )
@@ -510,6 +516,30 @@ async def convert_quotation_to_contract(
                 raise HTTPException(
                     status_code=400,
                     detail=f"Device {device.serial_number} is currently in use by an active contract",
+                )
+
+            now = datetime.now(timezone.utc)
+            active_commitment = (
+                db.query(InventoryCommitment)
+                .filter(
+                    InventoryCommitment.device_id == device_id,
+                    InventoryCommitment.status.in_([CommitmentStatus.PENDING.value, CommitmentStatus.CONFIRMED.value]),
+                    or_(
+                        InventoryCommitment.expires_at.is_(None),
+                        InventoryCommitment.expires_at > now,
+                    ),
+                    or_(
+                        and_(InventoryCommitment.start_date < end_date, InventoryCommitment.end_date > convert_data.start_date),
+                        and_(convert_data.start_date < InventoryCommitment.end_date, end_date > InventoryCommitment.start_date),
+                    ),
+                )
+                .first()
+            )
+            if active_commitment:
+                lock_service.unlock_by_token(lock_token, current_user)
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Device {device.serial_number} has a conflicting inventory commitment during the rental period",
                 )
 
         db.begin_nested()
