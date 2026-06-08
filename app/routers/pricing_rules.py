@@ -30,8 +30,7 @@ def get_applicable_pricing_rule(
 ) -> Optional[PricingRule]:
     query = db.query(PricingRule).filter(
         PricingRule.category_id == category_id,
-        PricingRule.status == PricingRuleStatus.ACTIVE,
-        PricingRule.min_rental_days <= rental_days
+        PricingRule.status == PricingRuleStatus.ACTIVE
     )
 
     rules = query.order_by(PricingRule.priority.asc(), PricingRule.id.desc()).all()
@@ -284,15 +283,22 @@ async def trial_calculate(
             customer_role=customer_role
         )
 
+        discount_rate = 0.0
+        base_rental = daily_rate * calc_request.rental_days * item.quantity
+        discount_amount = 0.0
+        rental_fee = round(base_rental, 2)
+        deposit = round(base_deposit * item.quantity, 2)
+
         if rule:
             if rule.min_rental_days > effective_rental_days:
                 effective_rental_days = rule.min_rental_days
 
             discount_rate = rule.get_applicable_discount(calc_request.rental_days)
+            rental_fee = rule.calculate_rental_fee(daily_rate, calc_request.rental_days, item.quantity)
+            deposit = rule.calculate_deposit(base_deposit, item.quantity)
+
             base_rental = daily_rate * max(calc_request.rental_days, rule.min_rental_days) * item.quantity
             discount_amount = base_rental * (discount_rate / 100)
-            rental_fee = round(base_rental - discount_amount, 2)
-            deposit = rule.calculate_deposit(base_deposit, item.quantity)
 
             applied_rule_info = {
                 "rule_id": rule.id,
@@ -304,11 +310,6 @@ async def trial_calculate(
             if applied_rule_info not in applied_rules:
                 applied_rules.append(applied_rule_info)
         else:
-            discount_rate = 0.0
-            base_rental = daily_rate * calc_request.rental_days * item.quantity
-            discount_amount = 0.0
-            rental_fee = round(base_rental, 2)
-            deposit = round(base_deposit * item.quantity, 2)
             warnings.append(f"No pricing rule found for category '{category.name}', using default rates")
 
         total_base_rental += base_rental
