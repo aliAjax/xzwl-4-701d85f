@@ -37,3 +37,6 @@ class User(Base):
     created_contracts = relationship("Contract", foreign_keys="Contract.created_by_id", back_populates="created_by_user")
     reservations = relationship("Reservation", foreign_keys="Reservation.customer_id", back_populates="customer")
     credit_notes = relationship("CustomerCreditNote", foreign_keys="CustomerCreditNote.customer_id", back_populates="customer")
+    created_handovers = relationship("Handover", foreign_keys="Handover.created_by_id", back_populates="created_by")
+    staff_confirmed_handovers = relationship("Handover", foreign_keys="Handover.confirmed_by_staff_id", back_populates="confirmed_by_staff")
+    customer_confirmed_handovers = relationship("Handover", foreign_keys="Handover.confirmed_by_customer_id", back_populates="confirmed_by_customer")

@@ -78,3 +78,9 @@ from .device_swap import (
     DeviceSwapCancel,
     DeviceSwapResponse,
 )
+from .handover import (
+    HandoverCreate,
+    HandoverUpdate,
+    HandoverConfirm,
+    HandoverResponse,
+)

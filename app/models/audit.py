@@ -36,6 +36,10 @@ class AuditAction(str, enum.Enum):
     SWAP_CREATE = "swap_create"
     SWAP_COMPLETE = "swap_complete"
     SWAP_CANCEL = "swap_cancel"
+    HANDOVER_CREATE = "handover_create"
+    HANDOVER_UPDATE = "handover_update"
+    HANDOVER_CONFIRM = "handover_confirm"
+    HANDOVER_CANCEL = "handover_cancel"
 
 
 class AuditLog(Base):

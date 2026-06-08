@@ -51,6 +51,7 @@ class Contract(Base):
 
     items = relationship("ContractItem", back_populates="contract", cascade="all, delete-orphan")
     deposits = relationship("Deposit", back_populates="contract")
+    handovers = relationship("Handover", back_populates="contract")
 
     def calculate_rental_days(self) -> int:
         end = self.actual_return_date or self.end_date

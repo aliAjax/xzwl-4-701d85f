@@ -26,6 +26,7 @@ from .routers import (
     customer_credit_notes_router,
     device_imports_router,
     device_swaps_router,
+    handovers_router,
 )
 from .models.contract import Contract, ContractStatus
 from .models.device import DeviceStatus
@@ -65,6 +66,7 @@ app.include_router(device_transfers_router)
 app.include_router(customer_credit_notes_router)
 app.include_router(device_imports_router)
 app.include_router(device_swaps_router)
+app.include_router(handovers_router)
 
 
 @app.middleware("http")

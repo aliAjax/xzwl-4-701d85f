@@ -64,6 +64,7 @@ class Device(Base):
     device_locks = relationship("DeviceLock", back_populates="device")
     reservations = relationship("Reservation", back_populates="device")
     transfers = relationship("DeviceTransfer", back_populates="device")
+    handovers = relationship("Handover", back_populates="device")
 
     def is_available_for_rent(self) -> bool:
         if self.status in [
