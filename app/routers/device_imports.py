@@ -270,7 +270,7 @@ async def preview_batch_import(
         valid_count=valid_count,
         invalid_count=invalid_count,
         items=preview_items,
-        can_confirm=(invalid_count == 0),
+        can_confirm=(valid_count > 0),
         error_summary=error_summary,
     )
 
@@ -317,22 +317,33 @@ async def confirm_batch_import(
     if import_batch.status != ImportStatus.PREVIEWED:
         raise HTTPException(status_code=400, detail="只能确认状态为'已预览'的导入记录")
 
-    if import_batch.invalid_count > 0:
-        raise HTTPException(status_code=400, detail=f"存在{import_batch.invalid_count}条无效记录，请修正后重新预览")
-
     import_items = db.query(DeviceImportItem).filter(
         DeviceImportItem.import_id == import_batch.id
     ).order_by(DeviceImportItem.row_index).all()
 
-    invalid_items = [item for item in import_items if item.status != ImportItemStatus.VALID]
-    if invalid_items:
-        raise HTTPException(status_code=400, detail=f"存在{len(invalid_items)}条无效记录，无法确认导入")
+    valid_items = [item for item in import_items if item.status == ImportItemStatus.VALID]
+    invalid_items = [item for item in import_items if item.status == ImportItemStatus.INVALID]
+
+    if import_batch.invalid_count > 0 and not confirm_data.skip_invalid:
+        raise HTTPException(
+            status_code=400,
+            detail=f"存在{import_batch.invalid_count}条无效记录，请修正后重新预览，或设置 skip_invalid=True 跳过无效行"
+        )
+
+    if not valid_items:
+        raise HTTPException(status_code=400, detail="没有可导入的有效设备")
 
     try:
         imported_count = 0
+        skipped_count = 0
         device_ids = []
 
         for import_item in import_items:
+            if import_item.status != ImportItemStatus.VALID:
+                import_item.status = ImportItemStatus.SKIPPED
+                skipped_count += 1
+                continue
+
             category = db.query(DeviceCategory).filter(
                 DeviceCategory.id == import_item.category_id
             ).first()
@@ -370,6 +381,7 @@ async def confirm_batch_import(
         import_batch.status = ImportStatus.CONFIRMED
         import_batch.confirmed_at = datetime.now(timezone.utc)
         import_batch.imported_count = imported_count
+        import_batch.skipped_count = skipped_count
 
         db.commit()
 
@@ -397,15 +409,18 @@ async def confirm_batch_import(
             new_values={
                 "batch_number": import_batch.batch_number,
                 "imported_count": imported_count,
+                "skipped_count": skipped_count,
                 "device_ids": device_ids,
+                "skip_invalid": confirm_data.skip_invalid,
             },
-            description=f"批量导入确认: {import_batch.batch_number}, 成功导入{imported_count}台设备",
+            description=f"批量导入确认: {import_batch.batch_number}, 成功导入{imported_count}台设备, 跳过{skipped_count}台无效设备",
             ip_address=request.client.host if request.client else None,
         )
 
     except Exception as e:
         db.rollback()
         import_batch.status = ImportStatus.FAILED
+        import_batch.skipped_count = 0
         for import_item in import_items:
             import_item.status = ImportItemStatus.FAILED
             import_item.error_message = f"导入失败: {str(e)}"
@@ -447,6 +462,7 @@ async def confirm_batch_import(
         "valid_count": final_batch.valid_count,
         "invalid_count": final_batch.invalid_count,
         "imported_count": final_batch.imported_count,
+        "skipped_count": final_batch.skipped_count,
         "status": final_batch.status,
         "remarks": final_batch.remarks,
         "created_by": current_user.full_name,
@@ -456,7 +472,10 @@ async def confirm_batch_import(
         "items": items_response,
     }
 
-    return APIResponse(message=f"批量导入成功，共导入{imported_count}台设备", data=response_data)
+    message = f"批量导入成功，共导入{imported_count}台设备"
+    if skipped_count > 0:
+        message += f"，跳过{skipped_count}台无效设备"
+    return APIResponse(message=message, data=response_data)
 
 
 @router.get("", response_model=PaginatedResponse[ImportBatchResponse])
@@ -496,6 +515,7 @@ async def list_import_batches(
     for batch in batches:
         batch_dict = {c.name: getattr(batch, c.name) for c in batch.__table__.columns}
         batch_dict["created_by"] = users.get(batch.created_by_id)
+        batch_dict["skipped_count"] = batch.skipped_count
         response_data.append(batch_dict)
 
     return PaginatedResponse(
@@ -550,6 +570,7 @@ async def get_import_batch_detail(
         "valid_count": import_batch.valid_count,
         "invalid_count": import_batch.invalid_count,
         "imported_count": import_batch.imported_count,
+        "skipped_count": import_batch.skipped_count,
         "status": import_batch.status,
         "remarks": import_batch.remarks,
         "created_by": user.full_name if user else None,

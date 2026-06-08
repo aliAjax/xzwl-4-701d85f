@@ -20,6 +20,7 @@ class ImportItemStatus(str, enum.Enum):
     INVALID = "invalid"
     IMPORTED = "imported"
     FAILED = "failed"
+    SKIPPED = "skipped"
 
 
 class ValidationErrorType(str, enum.Enum):
@@ -44,6 +45,7 @@ class DeviceImport(Base):
     valid_count = Column(Integer, nullable=False, default=0)
     invalid_count = Column(Integer, nullable=False, default=0)
     imported_count = Column(Integer, nullable=False, default=0)
+    skipped_count = Column(Integer, nullable=False, default=0)
     status = Column(Enum(ImportStatus), default=ImportStatus.PENDING, nullable=False)
     previewed_at = Column(DateTime(timezone=True))
     confirmed_at = Column(DateTime(timezone=True))

@@ -50,6 +50,7 @@ class BatchImportPreviewResponse(BaseModel):
 
 class BatchImportConfirmRequest(BaseModel):
     import_id: int
+    skip_invalid: bool = Field(False, description="是否跳过无效行，只导入有效设备")
 
 
 class ImportItemResponse(BaseModel):
@@ -80,6 +81,7 @@ class ImportBatchResponse(BaseModel):
     valid_count: int
     invalid_count: int
     imported_count: int
+    skipped_count: int
     status: ImportStatus
     remarks: Optional[str]
     created_by: Optional[str]
