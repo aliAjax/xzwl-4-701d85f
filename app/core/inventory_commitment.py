@@ -288,6 +288,7 @@ class InventoryCommitmentService:
         start_date: datetime,
         end_date: datetime,
         exclude_commitment_id: Optional[int] = None,
+        exclude_user_id: Optional[int] = None,
     ) -> Tuple[bool, List[str]]:
         device = self.db.query(Device).filter(Device.id == device_id).with_for_update().first()
         if not device:
@@ -341,15 +342,14 @@ class InventoryCommitmentService:
         if conflicting_reservation:
             errors.append(f"Device {device_id} has conflicting reservation")
 
-        active_lock = (
-            self.db.query(DeviceLock)
-            .filter(
-                DeviceLock.device_id == device_id,
-                DeviceLock.is_active == 1,
-                DeviceLock.expires_at > now,
-            )
-            .first()
+        lock_query = self.db.query(DeviceLock).filter(
+            DeviceLock.device_id == device_id,
+            DeviceLock.is_active == 1,
+            DeviceLock.expires_at > now,
         )
+        if exclude_user_id:
+            lock_query = lock_query.filter(DeviceLock.user_id != exclude_user_id)
+        active_lock = lock_query.first()
         if active_lock:
             errors.append(f"Device {device_id} is currently locked")
 
@@ -454,7 +454,7 @@ class InventoryCommitmentService:
         self.db.begin_nested()
         try:
             is_available, errors = self._check_device_available(
-                device_id, warehouse_id, start_date, end_date
+                device_id, warehouse_id, start_date, end_date, exclude_user_id=user.id
             )
             if not is_available:
                 self.db.rollback()
@@ -518,7 +518,7 @@ class InventoryCommitmentService:
             all_errors = []
             for device_id in unique_device_ids:
                 is_available, errors = self._check_device_available(
-                    device_id, warehouse_id, start_date, end_date
+                    device_id, warehouse_id, start_date, end_date, exclude_user_id=user.id
                 )
                 if not is_available:
                     all_errors.extend(errors)
@@ -607,6 +607,7 @@ class InventoryCommitmentService:
                     commitment.start_date,
                     commitment.end_date,
                     exclude_commitment_id=commitment.id,
+                    exclude_user_id=user.id,
                 )
                 if not is_available:
                     all_errors.extend(errors)
@@ -842,6 +843,7 @@ class InventoryCommitmentService:
                     commitment.start_date,
                     commitment.end_date,
                     exclude_commitment_id=commitment.id,
+                    exclude_user_id=user.id,
                 )
                 if not is_available:
                     all_errors.extend(errors)

@@ -32,6 +32,7 @@ from ..core import (
     AuditAction,
 )
 from ..models.inventory_commitment import CommitmentType
+from ..models.warehouse import Warehouse
 
 router = APIRouter(prefix="/api/contracts", tags=["Contracts"])
 
@@ -184,6 +185,21 @@ async def create_contract(
     device_groups = {}
     for device in devices:
         warehouse_id = device.warehouse_id
+        if warehouse_id is None:
+            if device.location:
+                warehouse = (
+                    db.query(Warehouse)
+                    .filter(
+                        Warehouse.status == "active",
+                        or_(
+                            Warehouse.code == device.location,
+                            device.location.like(Warehouse.code + "%"),
+                        ),
+                    )
+                    .first()
+                )
+                if warehouse:
+                    warehouse_id = warehouse.id
         if warehouse_id is None:
             if contract_data.lock_token:
                 lock_service.unlock_by_token(contract_data.lock_token, current_user)
