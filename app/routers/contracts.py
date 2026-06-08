@@ -1,8 +1,9 @@
 from fastapi import APIRouter, Depends, HTTPException, status, Request
 from sqlalchemy.orm import Session
+from sqlalchemy import and_, or_
 from typing import Optional
 from math import ceil
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timezone, timedelta, date
 import uuid
 
 from ..database import get_db
@@ -54,6 +55,12 @@ async def list_contracts(
     per_page: int = 20,
     status: Optional[ContractStatus] = None,
     customer_id: Optional[int] = None,
+    start_date_from: Optional[date] = None,
+    start_date_to: Optional[date] = None,
+    end_date_from: Optional[date] = None,
+    end_date_to: Optional[date] = None,
+    contract_number: Optional[str] = None,
+    is_overdue: Optional[bool] = None,
     current_user: User = Depends(get_current_active_user),
     db: Session = Depends(get_db),
 ):
@@ -64,6 +71,34 @@ async def list_contracts(
         query = query.filter(Contract.customer_id == customer_id)
     if status:
         query = query.filter(Contract.status == status)
+    if start_date_from:
+        start_dt = datetime.combine(start_date_from, datetime.min.time(), tzinfo=timezone.utc)
+        query = query.filter(Contract.start_date >= start_dt)
+    if start_date_to:
+        end_dt = datetime.combine(start_date_to, datetime.max.time(), tzinfo=timezone.utc)
+        query = query.filter(Contract.start_date <= end_dt)
+    if end_date_from:
+        start_dt = datetime.combine(end_date_from, datetime.min.time(), tzinfo=timezone.utc)
+        query = query.filter(Contract.end_date >= start_dt)
+    if end_date_to:
+        end_dt = datetime.combine(end_date_to, datetime.max.time(), tzinfo=timezone.utc)
+        query = query.filter(Contract.end_date <= end_dt)
+    if contract_number:
+        query = query.filter(Contract.contract_number.ilike(f"%{contract_number}%"))
+    if is_overdue is not None:
+        now = datetime.now(timezone.utc)
+        overdue_condition = or_(
+            Contract.status == ContractStatus.OVERDUE,
+            and_(
+                Contract.status.in_([ContractStatus.ACTIVE, ContractStatus.RENEWED]),
+                Contract.end_date < now,
+                Contract.actual_return_date.is_(None),
+            ),
+        )
+        if is_overdue:
+            query = query.filter(overdue_condition)
+        else:
+            query = query.filter(~overdue_condition)
 
     total = query.count()
     contracts = query.order_by(Contract.created_at.desc()).offset((page - 1) * per_page).limit(per_page).all()
