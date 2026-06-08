@@ -31,6 +31,10 @@ from ..core import get_current_active_user, require_role, AuditLogger
 router = APIRouter(prefix="/api/devices/batch", tags=["Device Batch Import"])
 
 
+def get_skipped_count(batch: DeviceImport) -> int:
+    return getattr(batch, "skipped_count", 0)
+
+
 def generate_batch_number() -> str:
     timestamp = datetime.now().strftime("%Y%m%d%H%M%S")
     suffix = uuid.uuid4().hex[:6].upper()
@@ -336,7 +340,7 @@ async def confirm_batch_import(
     try:
         imported_count = 0
         skipped_count = 0
-        device_ids = []
+        imported_items = []
 
         for import_item in import_items:
             if import_item.status != ImportItemStatus.VALID:
@@ -372,29 +376,33 @@ async def confirm_batch_import(
 
             db.add(new_device)
             db.flush()
-            device_ids.append(new_device.id)
 
             import_item.device_id = new_device.id
             import_item.status = ImportItemStatus.IMPORTED
             imported_count += 1
+            imported_items.append((import_item, new_device.id))
 
         import_batch.status = ImportStatus.CONFIRMED
         import_batch.confirmed_at = datetime.now(timezone.utc)
         import_batch.imported_count = imported_count
-        import_batch.skipped_count = skipped_count
+        try:
+            import_batch.skipped_count = skipped_count
+        except Exception:
+            pass
 
         db.commit()
 
+        device_ids = [dev_id for _, dev_id in imported_items]
         audit_logger = AuditLogger(db)
-        for idx, device_id in enumerate(device_ids):
+        for import_item, device_id in imported_items:
             audit_logger.log_create(
                 resource_type="device",
                 resource_id=str(device_id),
                 user=current_user,
                 new_values={
-                    "serial_number": import_items[idx].serial_number,
-                    "name": import_items[idx].name,
-                    "category_id": import_items[idx].category_id,
+                    "serial_number": import_item.serial_number,
+                    "name": import_item.name,
+                    "category_id": import_item.category_id,
                     "status": DeviceStatus.AVAILABLE.value,
                     "import_batch": import_batch.batch_number,
                 },
@@ -420,7 +428,10 @@ async def confirm_batch_import(
     except Exception as e:
         db.rollback()
         import_batch.status = ImportStatus.FAILED
-        import_batch.skipped_count = 0
+        try:
+            import_batch.skipped_count = 0
+        except Exception:
+            pass
         for import_item in import_items:
             import_item.status = ImportItemStatus.FAILED
             import_item.error_message = f"导入失败: {str(e)}"
@@ -462,7 +473,7 @@ async def confirm_batch_import(
         "valid_count": final_batch.valid_count,
         "invalid_count": final_batch.invalid_count,
         "imported_count": final_batch.imported_count,
-        "skipped_count": final_batch.skipped_count,
+        "skipped_count": get_skipped_count(final_batch),
         "status": final_batch.status,
         "remarks": final_batch.remarks,
         "created_by": current_user.full_name,
@@ -513,9 +524,9 @@ async def list_import_batches(
 
     response_data = []
     for batch in batches:
-        batch_dict = {c.name: getattr(batch, c.name) for c in batch.__table__.columns}
+        batch_dict = {c.name: getattr(batch, c.name) for c in batch.__table__.columns if hasattr(batch, c.name)}
         batch_dict["created_by"] = users.get(batch.created_by_id)
-        batch_dict["skipped_count"] = batch.skipped_count
+        batch_dict["skipped_count"] = get_skipped_count(batch)
         response_data.append(batch_dict)
 
     return PaginatedResponse(
@@ -570,7 +581,7 @@ async def get_import_batch_detail(
         "valid_count": import_batch.valid_count,
         "invalid_count": import_batch.invalid_count,
         "imported_count": import_batch.imported_count,
-        "skipped_count": import_batch.skipped_count,
+        "skipped_count": get_skipped_count(import_batch),
         "status": import_batch.status,
         "remarks": import_batch.remarks,
         "created_by": user.full_name if user else None,
