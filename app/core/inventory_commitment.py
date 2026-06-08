@@ -58,10 +58,9 @@ class InventoryCommitmentService:
         )
 
         if warehouse_id:
-            warehouse_code = warehouse.code if warehouse else None
-            base_query = base_query.filter(
-                (Device.warehouse_id == warehouse_id) | (Device.location == warehouse_code)
-            )
+            warehouse_condition = self.availability_checker.warehouse_matcher.build_device_condition(warehouse_id)
+            if warehouse_condition is not None:
+                base_query = base_query.filter(warehouse_condition)
 
         total_in_warehouse = base_query.count()
 

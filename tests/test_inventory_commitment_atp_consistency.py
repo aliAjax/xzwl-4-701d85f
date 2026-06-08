@@ -363,6 +363,35 @@ class TestATPConsistency:
                 f"Expected 'not found or inactive' error, got {errors}"
             )
 
+        prefix_location_device = Device(
+            id=999,
+            serial_number="ATP-PREFIX-999",
+            name="Prefix Location Device",
+            category_id=test_data_setup["category"].id,
+            warehouse_id=None,
+            location=f"{test_data_setup['warehouse'].code}-A1",
+            status=DeviceStatus.AVAILABLE,
+        )
+        db_session.add(prefix_location_device)
+        db_session.commit()
+
+        available_atp, total_atp, _, breakdown_atp = service.get_available_to_promise(
+            category_id=test_data_setup["category"].id,
+            start_date=test_data_setup["start_date"],
+            end_date=test_data_setup["end_date"],
+            warehouse_id=test_data_setup["warehouse"].id,
+        )
+        is_available, errors = checker.check_device_available(
+            device_id=prefix_location_device.id,
+            warehouse_id=test_data_setup["warehouse"].id,
+            start_date=test_data_setup["start_date"],
+            end_date=test_data_setup["end_date"],
+        )
+        assert is_available, f"Prefix-location device should pass single check, got {errors}"
+        assert total_atp == 12
+        assert breakdown_atp["total_in_warehouse"] == 12
+        assert available_atp == 5
+
         wrong_warehouse = Warehouse(
             id=999,
             code="WH-WRONG",

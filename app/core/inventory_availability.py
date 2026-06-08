@@ -45,6 +45,7 @@ class WarehouseMatcher:
         return or_(
             Device.warehouse_id == warehouse_id,
             Device.location == warehouse_code,
+            Device.location.like(f"{warehouse_code}%") if warehouse_code else False,
         )
 
     def build_transfer_condition(self, warehouse_id: Optional[int]):
