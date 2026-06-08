@@ -66,9 +66,14 @@ class Device(Base):
     transfers = relationship("DeviceTransfer", back_populates="device")
 
     def is_available_for_rent(self) -> bool:
-        if self.status in [DeviceStatus.MAINTENANCE, DeviceStatus.REPAIR, DeviceStatus.RETIRED]:
-            return False
-        if self.status == DeviceStatus.DISINFECTION:
+        if self.status in [
+            DeviceStatus.IN_USE,
+            DeviceStatus.MAINTENANCE,
+            DeviceStatus.REPAIR,
+            DeviceStatus.DISINFECTION,
+            DeviceStatus.LOCKED,
+            DeviceStatus.RETIRED,
+        ]:
             return False
         if self.category.disinfection_required and not self.last_disinfection_date:
             return False

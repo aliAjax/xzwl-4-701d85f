@@ -101,14 +101,16 @@ def _validate_swap(
         messages.append("替换设备不能与原设备相同")
 
     if not new_device.is_available_for_rent():
-        if new_device.status in [DeviceStatus.MAINTENANCE, DeviceStatus.REPAIR]:
+        if new_device.status == DeviceStatus.IN_USE:
+            messages.append("替换设备正在使用中，不可租赁")
+        elif new_device.status in [DeviceStatus.MAINTENANCE, DeviceStatus.REPAIR]:
             messages.append(f"替换设备正在{new_device.status.value}中，不可租赁")
-        elif new_device.status == DeviceStatus.RETIRED:
-            messages.append("替换设备已报废，不可租赁")
+        elif new_device.status == DeviceStatus.DISINFECTION:
+            messages.append("替换设备正在消毒中，不可租赁")
         elif new_device.status == DeviceStatus.LOCKED:
             messages.append("替换设备已锁定，不可租赁")
-        elif new_device.status == DeviceStatus.IN_USE:
-            messages.append("替换设备正在使用中，不可租赁")
+        elif new_device.status == DeviceStatus.RETIRED:
+            messages.append("替换设备已报废，不可租赁")
         elif new_device.category.disinfection_required and not new_device.last_disinfection_date:
             messages.append("替换设备需要消毒但无消毒记录，不可租赁")
         else:
