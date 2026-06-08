@@ -31,6 +31,23 @@ def ensure_database_compatibility() -> None:
                 )
             )
 
+    if "contracts" in inspector.get_table_names():
+        contract_columns = {column["name"] for column in inspector.get_columns("contracts")}
+        if "commitment_batch_token" not in contract_columns:
+            with engine.begin() as connection:
+                connection.execute(
+                    text(
+                        "ALTER TABLE contracts "
+                        "ADD COLUMN commitment_batch_token VARCHAR(100)"
+                    )
+                )
+                connection.execute(
+                    text(
+                        "CREATE INDEX IF NOT EXISTS ix_contracts_commitment_batch_token "
+                        "ON contracts(commitment_batch_token)"
+                    )
+                )
+
 
 def get_db() -> Generator:
     db = SessionLocal()

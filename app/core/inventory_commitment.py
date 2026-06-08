@@ -738,3 +738,158 @@ class InventoryCommitmentService:
             query = query.filter(InventoryCommitment.commitment_type == commitment_type)
 
         return query.order_by(InventoryCommitment.created_at.desc()).all()
+
+    def get_commitments_by_reference(
+        self,
+        reference_id: int,
+        reference_type: str,
+        status: Optional[CommitmentStatus] = None,
+    ) -> List[InventoryCommitment]:
+        self._cleanup_expired_commitments()
+        query = self.db.query(InventoryCommitment).filter(
+            InventoryCommitment.reference_id == reference_id,
+            InventoryCommitment.reference_type == reference_type,
+        )
+        if status:
+            query = query.filter(InventoryCommitment.status == status)
+        return query.order_by(InventoryCommitment.created_at.desc()).all()
+
+    def release_commitments_by_reference(
+        self,
+        reference_id: int,
+        reference_type: str,
+        user: User,
+    ) -> Tuple[bool, List[str]]:
+        self.db.begin_nested()
+        try:
+            now = datetime.now(timezone.utc)
+            self._cleanup_expired_commitments()
+
+            commitments = (
+                self.db.query(InventoryCommitment)
+                .filter(
+                    InventoryCommitment.reference_id == reference_id,
+                    InventoryCommitment.reference_type == reference_type,
+                    InventoryCommitment.status.in_([CommitmentStatus.PENDING, CommitmentStatus.CONFIRMED]),
+                )
+                .with_for_update()
+                .all()
+            )
+
+            if not commitments:
+                return True, []
+
+            all_errors = []
+            for commitment in commitments:
+                if commitment.created_by_id != user.id and user.role not in ["admin", "staff"]:
+                    all_errors.append(
+                        f"Commitment for device {commitment.device_id} does not belong to you"
+                    )
+                    continue
+                commitment.status = CommitmentStatus.CANCELLED
+                commitment.cancelled_at = now
+
+            if all_errors:
+                self.db.rollback()
+                return False, all_errors
+
+            self.db.commit()
+            return True, []
+        except Exception as e:
+            self.db.rollback()
+            raise e
+
+    def confirm_commitments_by_reference(
+        self,
+        reference_id: int,
+        reference_type: str,
+        user: User,
+    ) -> Tuple[bool, Optional[List[InventoryCommitment]], List[str]]:
+        self.db.begin_nested()
+        try:
+            now = datetime.now(timezone.utc)
+            self._cleanup_expired_commitments()
+
+            commitments = (
+                self.db.query(InventoryCommitment)
+                .filter(
+                    InventoryCommitment.reference_id == reference_id,
+                    InventoryCommitment.reference_type == reference_type,
+                    InventoryCommitment.status == CommitmentStatus.PENDING,
+                )
+                .with_for_update()
+                .all()
+            )
+
+            if not commitments:
+                return False, None, ["No pending commitments found for this reference"]
+
+            all_errors = []
+            for commitment in commitments:
+                if commitment.is_expired():
+                    all_errors.append(f"Commitment for device {commitment.device_id} has expired")
+                    continue
+
+                if commitment.created_by_id != user.id and user.role not in ["admin", "staff"]:
+                    all_errors.append(
+                        f"Commitment for device {commitment.device_id} does not belong to you"
+                    )
+                    continue
+
+                is_available, errors = self._check_device_available(
+                    commitment.device_id,
+                    commitment.warehouse_id,
+                    commitment.start_date,
+                    commitment.end_date,
+                    exclude_commitment_id=commitment.id,
+                )
+                if not is_available:
+                    all_errors.extend(errors)
+                    continue
+
+            if all_errors:
+                self.db.rollback()
+                return False, None, all_errors
+
+            for commitment in commitments:
+                commitment.status = CommitmentStatus.CONFIRMED
+                commitment.confirmed_at = now
+
+            self.db.commit()
+            return True, commitments, []
+        except Exception as e:
+            self.db.rollback()
+            raise e
+
+    def complete_commitments_by_reference(
+        self,
+        reference_id: int,
+        reference_type: str,
+        user: User,
+    ) -> Tuple[bool, List[str]]:
+        self.db.begin_nested()
+        try:
+            self._cleanup_expired_commitments()
+
+            commitments = (
+                self.db.query(InventoryCommitment)
+                .filter(
+                    InventoryCommitment.reference_id == reference_id,
+                    InventoryCommitment.reference_type == reference_type,
+                    InventoryCommitment.status == CommitmentStatus.CONFIRMED,
+                )
+                .with_for_update()
+                .all()
+            )
+
+            if not commitments:
+                return True, []
+
+            for commitment in commitments:
+                commitment.status = CommitmentStatus.COMPLETED
+
+            self.db.commit()
+            return True, []
+        except Exception as e:
+            self.db.rollback()
+            raise e

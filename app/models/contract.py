@@ -53,6 +53,8 @@ class Contract(Base):
     deposits = relationship("Deposit", back_populates="contract")
     handovers = relationship("Handover", back_populates="contract")
 
+    commitment_batch_token = Column(String(100), index=True)
+
     def calculate_rental_days(self) -> int:
         end = self.actual_return_date or self.end_date
         delta = end - self.start_date

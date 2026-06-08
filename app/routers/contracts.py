@@ -28,8 +28,10 @@ from ..core import (
     require_role,
     AuditLogger,
     DeviceLockService,
+    InventoryCommitmentService,
     AuditAction,
 )
+from ..models.inventory_commitment import CommitmentType
 
 router = APIRouter(prefix="/api/contracts", tags=["Contracts"])
 
@@ -163,15 +165,36 @@ async def create_contract(
             raise HTTPException(status_code=400, detail="; ".join(errors))
         contract_data.lock_token = lock_token
 
+    devices = []
     for item in contract_data.items:
         device = db.query(Device).filter(Device.id == item.device_id).first()
         if not device:
+            if contract_data.lock_token:
+                lock_service.unlock_by_token(contract_data.lock_token, current_user)
             raise HTTPException(status_code=400, detail=f"Device {item.device_id} not found")
         if not device.is_available_for_rent():
+            if contract_data.lock_token:
+                lock_service.unlock_by_token(contract_data.lock_token, current_user)
             raise HTTPException(
                 status_code=400,
                 detail=f"Device {device.serial_number} is not available for rent",
             )
+        devices.append(device)
+
+    device_groups = {}
+    for device in devices:
+        warehouse_id = device.warehouse_id
+        if warehouse_id is None:
+            if contract_data.lock_token:
+                lock_service.unlock_by_token(contract_data.lock_token, current_user)
+            raise HTTPException(
+                status_code=400,
+                detail=f"Device {device.serial_number} is not assigned to a warehouse",
+            )
+        key = (warehouse_id, device.category_id)
+        if key not in device_groups:
+            device_groups[key] = []
+        device_groups[key].append(device.id)
 
     db.begin_nested()
     try:
@@ -212,12 +235,45 @@ async def create_contract(
         new_contract.deposit_amount = deposit_amount
         new_contract.final_amount = max(0, total_amount - contract_data.discount_amount)
 
+        db.flush()
+
+        commitment_service = InventoryCommitmentService(db)
+        first_batch_token = None
+        for (warehouse_id, category_id), group_device_ids in device_groups.items():
+            success, commitments, errors = commitment_service.create_commitments_bulk(
+                device_ids=group_device_ids,
+                warehouse_id=warehouse_id,
+                category_id=category_id,
+                commitment_type=CommitmentType.CONTRACT,
+                start_date=contract_data.start_date,
+                end_date=contract_data.end_date,
+                user=current_user,
+                reference_id=new_contract.id,
+                reference_type="contract",
+                expires_minutes=30,
+                notes=f"Contract commitment for contract {new_contract.contract_number}",
+            )
+            if not success:
+                db.rollback()
+                if contract_data.lock_token:
+                    lock_service.unlock_by_token(contract_data.lock_token, current_user)
+                raise HTTPException(
+                    status_code=400,
+                    detail="Inventory commitment conflict: " + "; ".join(errors),
+                )
+            if first_batch_token is None and commitments:
+                first_batch_token = commitments[0].batch_token
+
+        new_contract.commitment_batch_token = first_batch_token
+
         db.commit()
         db.refresh(new_contract)
 
         if contract_data.lock_token:
             lock_service.unlock_by_token(contract_data.lock_token, current_user)
 
+    except HTTPException:
+        raise
     except Exception as e:
         db.rollback()
         if contract_data.lock_token:
@@ -235,8 +291,9 @@ async def create_contract(
             "customer_id": new_contract.customer_id,
             "total_amount": new_contract.total_amount,
             "deposit_amount": new_contract.deposit_amount,
+            "commitment_batch_token": new_contract.commitment_batch_token,
         },
-        description=f"Contract {new_contract.contract_number} created",
+        description=f"Contract {new_contract.contract_number} created with inventory commitments",
         ip_address=request.client.host if request.client else None,
     )
 
@@ -283,6 +340,18 @@ async def update_contract_status(
         )
 
     if status_data.status == ContractStatus.ACTIVE:
+        commitment_service = InventoryCommitmentService(db)
+        success, confirmed_commitments, errors = commitment_service.confirm_commitments_by_reference(
+            reference_id=contract.id,
+            reference_type="contract",
+            user=current_user,
+        )
+        if not success:
+            raise HTTPException(
+                status_code=400,
+                detail="Failed to confirm inventory commitments: " + "; ".join(errors),
+            )
+
         for item in contract.items:
             device = db.query(Device).filter(Device.id == item.device_id).first()
             if not device.is_available_for_rent():
@@ -292,6 +361,19 @@ async def update_contract_status(
                 )
             device.status = DeviceStatus.IN_USE
             device.current_owner = contract.customer.full_name
+
+    if status_data.status == ContractStatus.CANCELLED:
+        commitment_service = InventoryCommitmentService(db)
+        success, errors = commitment_service.release_commitments_by_reference(
+            reference_id=contract.id,
+            reference_type="contract",
+            user=current_user,
+        )
+        if not success:
+            raise HTTPException(
+                status_code=400,
+                detail="Failed to release inventory commitments: " + "; ".join(errors),
+            )
 
     contract.status = status_data.status
     db.commit()
@@ -393,6 +475,19 @@ async def return_contract(
     if return_data.notes:
         contract.notes = (contract.notes or "") + f"\n\nReturn notes: {return_data.notes}"
 
+    commitment_service = InventoryCommitmentService(db)
+    success, errors = commitment_service.complete_commitments_by_reference(
+        reference_id=contract.id,
+        reference_type="contract",
+        user=current_user,
+    )
+    if not success:
+        db.rollback()
+        raise HTTPException(
+            status_code=400,
+            detail="Failed to complete inventory commitments: " + "; ".join(errors),
+        )
+
     db.commit()
     db.refresh(contract)
 
@@ -462,6 +557,18 @@ async def delete_contract(
 
     if contract.status in [ContractStatus.ACTIVE, ContractStatus.OVERDUE, ContractStatus.RETURNED]:
         raise HTTPException(status_code=400, detail="Cannot delete active or completed contracts")
+
+    commitment_service = InventoryCommitmentService(db)
+    success, errors = commitment_service.release_commitments_by_reference(
+        reference_id=contract.id,
+        reference_type="contract",
+        user=current_user,
+    )
+    if not success:
+        raise HTTPException(
+            status_code=400,
+            detail="Failed to release inventory commitments: " + "; ".join(errors),
+        )
 
     old_values = {
         "contract_number": contract.contract_number,
