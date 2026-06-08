@@ -1,6 +1,6 @@
 from fastapi import APIRouter, Depends, HTTPException, status, Request
 from sqlalchemy.orm import Session
-from sqlalchemy import and_, or_
+from sqlalchemy import and_, or_, func
 from typing import Optional
 from math import ceil
 from datetime import datetime, timezone, timedelta, date
@@ -82,13 +82,11 @@ async def list_contracts(
     if expiring_within_days is not None:
         if expiring_within_days < 1:
             raise HTTPException(status_code=400, detail="expiring_within_days must be at least 1")
-        now = datetime.now(timezone.utc)
-        expiry_cutoff = now + timedelta(days=expiring_within_days)
         query = query.filter(
             Contract.status.in_([ContractStatus.ACTIVE, ContractStatus.RENEWED]),
             Contract.actual_return_date.is_(None),
-            Contract.end_date >= now,
-            Contract.end_date <= expiry_cutoff,
+            Contract.end_date >= func.now(),
+            Contract.end_date <= func.now() + timedelta(days=expiring_within_days),
         )
     if status:
         query = query.filter(Contract.status == status)
@@ -107,12 +105,11 @@ async def list_contracts(
     if contract_number:
         query = query.filter(Contract.contract_number.ilike(f"%{contract_number}%"))
     if is_overdue is not None:
-        now = datetime.now(timezone.utc)
         overdue_condition = or_(
             Contract.status == ContractStatus.OVERDUE,
             and_(
                 Contract.status.in_([ContractStatus.ACTIVE, ContractStatus.RENEWED]),
-                Contract.end_date < now,
+                Contract.end_date < func.now(),
                 Contract.actual_return_date.is_(None),
             ),
         )
@@ -122,7 +119,11 @@ async def list_contracts(
             query = query.filter(~overdue_condition)
 
     total = query.count()
-    contracts = query.order_by(Contract.end_date.asc()).offset((page - 1) * per_page).limit(per_page).all()
+    if expiring_within_days is not None:
+        query = query.order_by(Contract.end_date.asc())
+    else:
+        query = query.order_by(Contract.created_at.desc())
+    contracts = query.offset((page - 1) * per_page).limit(per_page).all()
 
     response_data = [get_contract_dict(c) for c in contracts]
 
