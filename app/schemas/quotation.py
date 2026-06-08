@@ -1,4 +1,4 @@
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from typing import Optional, List
 from datetime import datetime
 
@@ -53,6 +53,33 @@ class QuotationStatusUpdate(BaseModel):
 
 class QuotationVoidRequest(BaseModel):
     reason: Optional[str] = None
+
+
+class QuotationConvertItem(BaseModel):
+    quotation_item_id: int = Field(..., gt=0)
+    device_ids: List[int] = Field(...)
+
+    @field_validator("device_ids")
+    @classmethod
+    def check_device_ids_not_empty(cls, v: List[int]) -> List[int]:
+        if not v:
+            raise ValueError("device_ids cannot be empty")
+        if len(v) != len(set(v)):
+            raise ValueError("device_ids cannot contain duplicates")
+        return v
+
+
+class QuotationConvertRequest(BaseModel):
+    start_date: datetime
+    items: List[QuotationConvertItem]
+    notes: Optional[str] = None
+
+    @field_validator("items")
+    @classmethod
+    def check_items_not_empty(cls, v: List[QuotationConvertItem]) -> List[QuotationConvertItem]:
+        if not v:
+            raise ValueError("items cannot be empty")
+        return v
 
 
 class QuotationCalculationResponse(BaseModel):

@@ -45,6 +45,8 @@ from .quotation import (
     QuotationItemResponse,
     QuotationStatusUpdate,
     QuotationVoidRequest,
+    QuotationConvertRequest,
+    QuotationConvertItem,
 )
 from .device_transfer import (
     DeviceTransferCreate,
