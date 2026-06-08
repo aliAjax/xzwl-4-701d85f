@@ -156,7 +156,7 @@ class InventoryCommitmentService:
             .join(DeviceTransfer, DeviceTransfer.device_id == Device.id)
             .filter(
                 Device.category_id == category_id,
-                DeviceTransfer.status.in_([TransferStatus.CONFIRMED, TransferStatus.IN_TRANSIT]),
+                DeviceTransfer.status.in_([TransferStatus.PENDING, TransferStatus.CONFIRMED, TransferStatus.IN_TRANSIT]),
                 or_(
                     DeviceTransfer.completed_at.is_(None),
                     DeviceTransfer.completed_at > start_date,
@@ -375,7 +375,7 @@ class InventoryCommitmentService:
             self.db.query(DeviceTransfer)
             .filter(
                 DeviceTransfer.device_id == device_id,
-                DeviceTransfer.status.in_([TransferStatus.CONFIRMED, TransferStatus.IN_TRANSIT]),
+                DeviceTransfer.status.in_([TransferStatus.PENDING, TransferStatus.CONFIRMED, TransferStatus.IN_TRANSIT]),
                 or_(
                     DeviceTransfer.from_location == warehouse.code,
                     DeviceTransfer.to_location == warehouse.code,
@@ -410,11 +410,32 @@ class InventoryCommitmentService:
         )
         if exclude_commitment_id:
             commitment_query = commitment_query.filter(InventoryCommitment.id != exclude_commitment_id)
-        conflicting_commitment = commitment_query.first()
+        conflicting_commitment = commitment_query.with_for_update().first()
         if conflicting_commitment:
             errors.append(f"Device {device_id} has conflicting inventory commitment")
 
         return len(errors) == 0, errors
+
+    def _check_duplicate_commitment(
+        self,
+        device_id: int,
+        reference_id: Optional[int] = None,
+        reference_type: Optional[str] = None,
+        exclude_commitment_id: Optional[int] = None,
+    ) -> Optional[InventoryCommitment]:
+        if not reference_id or not reference_type:
+            return None
+
+        self._cleanup_expired_commitments()
+        query = self.db.query(InventoryCommitment).filter(
+            InventoryCommitment.device_id == device_id,
+            InventoryCommitment.reference_id == reference_id,
+            InventoryCommitment.reference_type == reference_type,
+            InventoryCommitment.status.in_([CommitmentStatus.PENDING, CommitmentStatus.CONFIRMED]),
+        )
+        if exclude_commitment_id:
+            query = query.filter(InventoryCommitment.id != exclude_commitment_id)
+        return query.with_for_update().first()
 
     def create_commitment(
         self,
@@ -438,6 +459,13 @@ class InventoryCommitmentService:
             if not is_available:
                 self.db.rollback()
                 return False, None, errors
+
+            duplicate = self._check_duplicate_commitment(device_id, reference_id, reference_type)
+            if duplicate:
+                self.db.rollback()
+                return False, None, [
+                    f"Device {device_id} already has an active commitment for reference {reference_type}:{reference_id}"
+                ]
 
             commitment_token = str(uuid.uuid4())
             expires_at = datetime.now(timezone.utc) + timedelta(minutes=expires_minutes)
@@ -494,6 +522,12 @@ class InventoryCommitmentService:
                 )
                 if not is_available:
                     all_errors.extend(errors)
+
+                duplicate = self._check_duplicate_commitment(device_id, reference_id, reference_type)
+                if duplicate:
+                    all_errors.append(
+                        f"Device {device_id} already has an active commitment for reference {reference_type}:{reference_id}"
+                    )
 
             if all_errors:
                 self.db.rollback()

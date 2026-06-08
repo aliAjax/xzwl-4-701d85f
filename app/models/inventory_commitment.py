@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, DateTime, ForeignKey, Text, Enum, Index
+from sqlalchemy import Column, Integer, String, DateTime, ForeignKey, Text, Enum, Index, text
 from sqlalchemy.sql import func
 from sqlalchemy.orm import relationship
 from datetime import datetime, timezone
@@ -68,6 +68,15 @@ class InventoryCommitment(Base):
         Index("idx_commitment_warehouse_category", "warehouse_id", "category_id", "status"),
         Index("idx_commitment_batch_token", "batch_token"),
         Index("idx_commitment_reference", "reference_type", "reference_id"),
+        Index(
+            "idx_commitment_device_reference_unique",
+            "device_id",
+            "reference_type",
+            "reference_id",
+            unique=True,
+            postgresql_where=text("status IN ('pending', 'confirmed')"),
+            sqlite_where=text("status IN ('pending', 'confirmed')"),
+        ),
     )
 
     def is_active(self) -> bool:
