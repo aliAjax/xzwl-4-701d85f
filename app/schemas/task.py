@@ -88,3 +88,6 @@ class TaskGenerateResult(BaseModel):
     maintenance_tasks: int
     disinfection_tasks: int
     repair_tasks: int
+    skipped_due_to_repair: int = 0
+    skipped_due_to_existing: int = 0
+    cancelled_due_to_repair: int = 0

@@ -344,6 +344,48 @@ async def create_task(
     )
 
 
+def _get_existing_tasks_by_type(db: Session) -> dict:
+    existing_tasks = db.query(
+        MaintenanceTask.device_id,
+        MaintenanceTask.task_type,
+    ).filter(
+        MaintenanceTask.status.notin_([TaskStatus.COMPLETED, TaskStatus.CANCELLED]),
+    ).all()
+    result = {}
+    for device_id, task_type in existing_tasks:
+        if device_id not in result:
+            result[device_id] = set()
+        result[device_id].add(task_type)
+    return result
+
+
+def _has_active_repair(db: Session, device_id: int) -> bool:
+    return db.query(RepairRecord).filter(
+        RepairRecord.device_id == device_id,
+        RepairRecord.status.notin_([
+            RepairStatus.COMPLETED.value,
+            RepairStatus.CANCELLED.value,
+            RepairStatus.UNREPAIRABLE.value,
+        ]),
+    ).first() is not None
+
+
+def _calculate_priority(due_date: datetime, now: datetime, task_type: TaskType) -> TaskPriority:
+    base_priority = TaskPriority.MEDIUM
+    if task_type == TaskType.REPAIR:
+        base_priority = TaskPriority.HIGH
+
+    if due_date <= now:
+        if task_type == TaskType.REPAIR:
+            return TaskPriority.URGENT
+        return TaskPriority.HIGH
+    elif due_date <= now + timedelta(days=1):
+        return TaskPriority.HIGH
+    elif due_date <= now + timedelta(days=3):
+        return TaskPriority.MEDIUM if base_priority == TaskPriority.MEDIUM else TaskPriority.HIGH
+    return base_priority
+
+
 @router.post("/generate", response_model=APIResponse[TaskGenerateResult])
 @require_role([UserRole.ADMIN, UserRole.STAFF])
 async def generate_tasks(
@@ -358,123 +400,195 @@ async def generate_tasks(
     maintenance_count = 0
     disinfection_count = 0
     repair_count = 0
+    skipped_due_to_repair = 0
+    skipped_due_to_existing = 0
 
-    existing_task_device_ids = db.query(MaintenanceTask.device_id).filter(
-        MaintenanceTask.status.notin_([TaskStatus.COMPLETED, TaskStatus.CANCELLED]),
-    ).distinct().all()
-    existing_device_ids = {row[0] for row in existing_task_device_ids}
+    existing_tasks_by_type = _get_existing_tasks_by_type(db)
 
     all_devices = db.query(Device).filter(
         Device.status.notin_([DeviceStatus.RETIRED]),
-        ~Device.id.in_(existing_device_ids),
     ).all()
 
-    devices_needing_maintenance = []
+    task_generation_results = []
+    cancelled_due_to_repair = 0
+
     for device in all_devices:
-        next_maint = _ensure_aware(device.next_maintenance_date)
-        if next_maint and next_maint <= cutoff_date:
-            devices_needing_maintenance.append(device)
+        device_tasks = existing_tasks_by_type.get(device.id, set())
+        has_active_repair_task = TaskType.REPAIR in device_tasks
+        has_active_repair_record = _has_active_repair(db, device.id)
+        has_active_maintenance_task = TaskType.MAINTENANCE in device_tasks
+        has_active_disinfection_task = TaskType.DISINFECTION in device_tasks
 
-    for device in devices_needing_maintenance:
-        category = db.query(DeviceCategory).filter(
-            DeviceCategory.id == device.category_id
-        ).first()
+        device_status = device.status.value if hasattr(device.status, 'value') else str(device.status)
 
-        next_maint = _ensure_aware(device.next_maintenance_date) or now
-        priority = TaskPriority.MEDIUM
-        if next_maint <= now:
-            priority = TaskPriority.URGENT
-        elif next_maint <= now + timedelta(days=2):
-            priority = TaskPriority.HIGH
+        repair_task = None
+        maintenance_task = None
+        disinfection_task = None
 
-        task = MaintenanceTask(
-            device_id=device.id,
-            task_type=TaskType.MAINTENANCE,
-            title=f"设备维护 - {device.name} ({device.serial_number})",
-            description=f"根据设备维护周期，需要对设备进行定期维护。维护周期：{category.maintenance_cycle_days if category else 30}天",
-            priority=priority,
-            status=TaskStatus.PENDING,
-            scheduled_date=next_maint,
-            due_date=next_maint,
-            created_by_id=current_user.id,
-            is_overdue=next_maint <= now,
-        )
-        db.add(task)
-        maintenance_count += 1
+        if (has_active_repair_task or has_active_repair_record or
+                device_status == DeviceStatus.REPAIR.value):
+            if has_active_maintenance_task or has_active_disinfection_task:
+                conflicting_tasks = db.query(MaintenanceTask).filter(
+                    MaintenanceTask.device_id == device.id,
+                    MaintenanceTask.status.notin_([TaskStatus.COMPLETED, TaskStatus.CANCELLED]),
+                    MaintenanceTask.task_type.in_([TaskType.MAINTENANCE, TaskType.DISINFECTION]),
+                ).all()
+                for conflict_task in conflicting_tasks:
+                    conflict_task.status = TaskStatus.CANCELLED
+                    conflict_task.completion_notes = "Cancelled: Device requires repair, maintenance and disinfection tasks are suspended"
+                    cancelled_due_to_repair += 1
 
-    disinfection_cycle_days = 7
-    devices_needing_disinfection = []
-    for device in all_devices:
-        category = db.query(DeviceCategory).filter(
-            DeviceCategory.id == device.category_id
-        ).first()
-        if not category or not category.disinfection_required:
-            continue
-        last_disinfect = _ensure_aware(device.last_disinfection_date)
-        if last_disinfect is None:
-            devices_needing_disinfection.append(device)
+            if not has_active_repair_task and has_active_repair_record:
+                active_repair = db.query(RepairRecord).filter(
+                    RepairRecord.device_id == device.id,
+                    RepairRecord.status.notin_([
+                        RepairStatus.COMPLETED.value,
+                        RepairStatus.CANCELLED.value,
+                        RepairStatus.UNREPAIRABLE.value,
+                    ]),
+                ).first()
+                if active_repair:
+                    priority = TaskPriority.URGENT
+                    if active_repair.priority == "urgent":
+                        priority = TaskPriority.URGENT
+                    elif active_repair.priority == "high":
+                        priority = TaskPriority.HIGH
+
+                    repair_task = MaintenanceTask(
+                        device_id=device.id,
+                        task_type=TaskType.REPAIR,
+                        title=f"设备维修 - {device.name} ({device.serial_number})",
+                        description=f"维修任务：{active_repair.fault_description}",
+                        priority=priority,
+                        status=TaskStatus.PENDING,
+                        scheduled_date=now,
+                        due_date=now + timedelta(days=3),
+                        created_by_id=current_user.id,
+                        repair_record_id=active_repair.id,
+                        is_overdue=False,
+                    )
+            elif device_status == DeviceStatus.REPAIR.value and not has_active_repair_task:
+                if not has_active_repair_record:
+                    repair_task = MaintenanceTask(
+                        device_id=device.id,
+                        task_type=TaskType.REPAIR,
+                        title=f"设备维修（状态同步）- {device.name} ({device.serial_number})",
+                        description="设备状态为维修中，但未找到维修记录，需要确认维修状态。",
+                        priority=TaskPriority.HIGH,
+                        status=TaskStatus.PENDING,
+                        scheduled_date=now,
+                        due_date=now + timedelta(days=1),
+                        created_by_id=current_user.id,
+                        is_overdue=False,
+                    )
+
+            if repair_task is None:
+                skipped_due_to_repair += 2
+                continue
         else:
-            next_disinfect = last_disinfect + timedelta(days=disinfection_cycle_days)
-            if next_disinfect <= cutoff_date:
-                devices_needing_disinfection.append(device)
+            if not has_active_maintenance_task:
+                next_maint = _ensure_aware(device.next_maintenance_date)
+                if next_maint and next_maint <= cutoff_date:
+                    category = db.query(DeviceCategory).filter(
+                        DeviceCategory.id == device.category_id
+                    ).first()
+                    priority = _calculate_priority(next_maint, now, TaskType.MAINTENANCE)
+                    maintenance_task = MaintenanceTask(
+                        device_id=device.id,
+                        task_type=TaskType.MAINTENANCE,
+                        title=f"设备维护 - {device.name} ({device.serial_number})",
+                        description=f"根据设备维护周期，需要对设备进行定期维护。维护周期：{category.maintenance_cycle_days if category else 30}天",
+                        priority=priority,
+                        status=TaskStatus.PENDING,
+                        scheduled_date=next_maint,
+                        due_date=next_maint,
+                        created_by_id=current_user.id,
+                        is_overdue=next_maint <= now,
+                    )
+                elif has_active_maintenance_task:
+                    skipped_due_to_existing += 1
 
-    for device in devices_needing_disinfection:
-        last_disinfect = _ensure_aware(device.last_disinfection_date)
-        if last_disinfect:
-            next_disinfection_date = last_disinfect + timedelta(days=disinfection_cycle_days)
-        else:
-            next_disinfection_date = now
+            if not has_active_disinfection_task:
+                category = db.query(DeviceCategory).filter(
+                    DeviceCategory.id == device.category_id
+                ).first()
+                if category and category.disinfection_required:
+                    disinfection_cycle_days = 7
+                    last_disinfect = _ensure_aware(device.last_disinfection_date)
+                    if last_disinfect is None:
+                        next_disinfect = now
+                    else:
+                        next_disinfect = last_disinfect + timedelta(days=disinfection_cycle_days)
 
-        priority = TaskPriority.MEDIUM
-        if next_disinfection_date <= now:
-            priority = TaskPriority.HIGH
+                    if next_disinfect <= cutoff_date:
+                        priority = _calculate_priority(next_disinfect, now, TaskType.DISINFECTION)
+                        disinfection_task = MaintenanceTask(
+                            device_id=device.id,
+                            task_type=TaskType.DISINFECTION,
+                            title=f"设备消毒 - {device.name} ({device.serial_number})",
+                            description="根据设备消毒要求，需要对设备进行定期消毒。",
+                            priority=priority,
+                            status=TaskStatus.PENDING,
+                            scheduled_date=next_disinfect,
+                            due_date=next_disinfect + timedelta(days=1),
+                            created_by_id=current_user.id,
+                            is_overdue=next_disinfect <= now,
+                        )
+                elif has_active_disinfection_task:
+                    skipped_due_to_existing += 1
 
-        task = MaintenanceTask(
-            device_id=device.id,
-            task_type=TaskType.DISINFECTION,
-            title=f"设备消毒 - {device.name} ({device.serial_number})",
-            description="根据设备消毒要求，需要对设备进行定期消毒。",
-            priority=priority,
-            status=TaskStatus.PENDING,
-            scheduled_date=next_disinfection_date,
-            due_date=next_disinfection_date + timedelta(days=1),
-            created_by_id=current_user.id,
-            is_overdue=next_disinfection_date <= now,
-        )
-        db.add(task)
-        disinfection_count += 1
+        if device_status == DeviceStatus.MAINTENANCE.value and not has_active_maintenance_task and maintenance_task is None:
+            maintenance_task = MaintenanceTask(
+                device_id=device.id,
+                task_type=TaskType.MAINTENANCE,
+                title=f"设备维护（状态同步）- {device.name} ({device.serial_number})",
+                description="设备状态为维护中，但未找到维护任务，需要确认维护状态。",
+                priority=TaskPriority.HIGH,
+                status=TaskStatus.PENDING,
+                scheduled_date=now,
+                due_date=now + timedelta(days=1),
+                created_by_id=current_user.id,
+                is_overdue=False,
+            )
 
-    active_repairs = db.query(RepairRecord).filter(
-        RepairRecord.status.notin_([
-            RepairStatus.COMPLETED.value,
-            RepairStatus.CANCELLED.value,
-            RepairStatus.UNREPAIRABLE.value,
-        ]),
-        ~RepairRecord.device_id.in_(existing_device_ids),
-    ).all()
+        if device_status == DeviceStatus.DISINFECTION.value and not has_active_disinfection_task and disinfection_task is None:
+            disinfection_task = MaintenanceTask(
+                device_id=device.id,
+                task_type=TaskType.DISINFECTION,
+                title=f"设备消毒（状态同步）- {device.name} ({device.serial_number})",
+                description="设备状态为消毒中，但未找到消毒任务，需要确认消毒状态。",
+                priority=TaskPriority.HIGH,
+                status=TaskStatus.PENDING,
+                scheduled_date=now,
+                due_date=now + timedelta(days=1),
+                created_by_id=current_user.id,
+                is_overdue=False,
+            )
 
-    for repair in active_repairs:
-        priority = TaskPriority.MEDIUM
-        if repair.priority == "urgent":
-            priority = TaskPriority.URGENT
-        elif repair.priority == "high":
-            priority = TaskPriority.HIGH
-
-        task = MaintenanceTask(
-            device_id=repair.device_id,
-            task_type=TaskType.REPAIR,
-            title=f"设备维修 - {repair.device.name if repair.device else '未知设备'}",
-            description=f"维修任务：{repair.fault_description}",
-            priority=priority,
-            status=TaskStatus.PENDING,
-            scheduled_date=now,
-            due_date=now + timedelta(days=3),
-            created_by_id=current_user.id,
-            repair_record_id=repair.id,
-            is_overdue=False,
-        )
-        db.add(task)
-        repair_count += 1
+        if repair_task:
+            db.add(repair_task)
+            repair_count += 1
+            task_generation_results.append({
+                "device_id": device.id,
+                "task_type": "repair",
+                "priority": repair_task.priority.value,
+            })
+        if maintenance_task:
+            db.add(maintenance_task)
+            maintenance_count += 1
+            task_generation_results.append({
+                "device_id": device.id,
+                "task_type": "maintenance",
+                "priority": maintenance_task.priority.value,
+            })
+        if disinfection_task:
+            db.add(disinfection_task)
+            disinfection_count += 1
+            task_generation_results.append({
+                "device_id": device.id,
+                "task_type": "disinfection",
+                "priority": disinfection_task.priority.value,
+            })
 
     db.commit()
 
@@ -491,8 +605,11 @@ async def generate_tasks(
             "maintenance_tasks": maintenance_count,
             "disinfection_tasks": disinfection_count,
             "repair_tasks": repair_count,
+            "skipped_due_to_repair": skipped_due_to_repair,
+            "skipped_due_to_existing": skipped_due_to_existing,
+            "cancelled_due_to_repair": cancelled_due_to_repair,
         },
-        description=f"Generated {total} maintenance tasks",
+        description=f"Generated {total} maintenance tasks (skipped: {skipped_due_to_repair + skipped_due_to_existing}, cancelled: {cancelled_due_to_repair})",
         ip_address=request.client.host if request.client else None,
     )
 
@@ -503,6 +620,9 @@ async def generate_tasks(
             maintenance_tasks=maintenance_count,
             disinfection_tasks=disinfection_count,
             repair_tasks=repair_count,
+            skipped_due_to_repair=skipped_due_to_repair,
+            skipped_due_to_existing=skipped_due_to_existing,
+            cancelled_due_to_repair=cancelled_due_to_repair,
         ),
     )
 
@@ -760,6 +880,24 @@ async def complete_task(
                     repair_record.handled_by_id = current_user.id
                     repair_record.technician_notes = complete_data.completion_notes
 
+            if category and category.disinfection_required:
+                existing_tasks = _get_existing_tasks_by_type(db)
+                device_tasks = existing_tasks.get(task.device_id, set())
+                if TaskType.DISINFECTION not in device_tasks:
+                    post_repair_disinfection = MaintenanceTask(
+                        device_id=task.device_id,
+                        task_type=TaskType.DISINFECTION,
+                        title=f"维修后消毒 - {device.name} ({device.serial_number})",
+                        description="设备维修完成后需要进行消毒处理，确保设备卫生安全后方可投入使用。",
+                        priority=TaskPriority.HIGH,
+                        status=TaskStatus.PENDING,
+                        scheduled_date=now,
+                        due_date=now + timedelta(days=1),
+                        created_by_id=current_user.id,
+                        is_overdue=False,
+                    )
+                    db.add(post_repair_disinfection)
+
         if device.status in [
             DeviceStatus.MAINTENANCE,
             DeviceStatus.DISINFECTION,
@@ -927,3 +1065,183 @@ async def delete_task(
     )
 
     return APIResponse(message="Task deleted successfully")
+
+
+@router.get("/stats/dashboard", response_model=APIResponse)
+@require_role([UserRole.ADMIN])
+async def get_task_dashboard(
+    current_user: User = Depends(get_current_active_user),
+    db: Session = Depends(get_db),
+):
+    _update_overdue_tasks(db)
+    now = datetime.now(timezone.utc)
+    thirty_days_ago = now - timedelta(days=30)
+    seven_days_ago = now - timedelta(days=7)
+
+    all_active_tasks = db.query(MaintenanceTask).filter(
+        MaintenanceTask.status.notin_([TaskStatus.COMPLETED, TaskStatus.CANCELLED])
+    ).all()
+
+    pending_tasks = [t for t in all_active_tasks if t.status == TaskStatus.PENDING]
+    in_progress_tasks = [t for t in all_active_tasks if t.status == TaskStatus.IN_PROGRESS]
+    claimed_tasks = [t for t in all_active_tasks if t.status == TaskStatus.CLAIMED]
+    overdue_tasks = [t for t in all_active_tasks if t.is_overdue]
+
+    completed_last_30 = db.query(MaintenanceTask).filter(
+        MaintenanceTask.status == TaskStatus.COMPLETED,
+        MaintenanceTask.completed_date >= thirty_days_ago,
+    ).all()
+
+    completed_last_7 = db.query(MaintenanceTask).filter(
+        MaintenanceTask.status == TaskStatus.COMPLETED,
+        MaintenanceTask.completed_date >= seven_days_ago,
+    ).all()
+
+    by_type = {
+        "maintenance": {
+            "pending": len([t for t in all_active_tasks if t.task_type == TaskType.MAINTENANCE and t.status == TaskStatus.PENDING]),
+            "in_progress": len([t for t in all_active_tasks if t.task_type == TaskType.MAINTENANCE and t.status == TaskStatus.IN_PROGRESS]),
+            "overdue": len([t for t in all_active_tasks if t.task_type == TaskType.MAINTENANCE and t.is_overdue]),
+            "completed_30d": len([t for t in completed_last_30 if t.task_type == TaskType.MAINTENANCE]),
+            "completed_7d": len([t for t in completed_last_7 if t.task_type == TaskType.MAINTENANCE]),
+        },
+        "disinfection": {
+            "pending": len([t for t in all_active_tasks if t.task_type == TaskType.DISINFECTION and t.status == TaskStatus.PENDING]),
+            "in_progress": len([t for t in all_active_tasks if t.task_type == TaskType.DISINFECTION and t.status == TaskStatus.IN_PROGRESS]),
+            "overdue": len([t for t in all_active_tasks if t.task_type == TaskType.DISINFECTION and t.is_overdue]),
+            "completed_30d": len([t for t in completed_last_30 if t.task_type == TaskType.DISINFECTION]),
+            "completed_7d": len([t for t in completed_last_7 if t.task_type == TaskType.DISINFECTION]),
+        },
+        "repair": {
+            "pending": len([t for t in all_active_tasks if t.task_type == TaskType.REPAIR and t.status == TaskStatus.PENDING]),
+            "in_progress": len([t for t in all_active_tasks if t.task_type == TaskType.REPAIR and t.status == TaskStatus.IN_PROGRESS]),
+            "overdue": len([t for t in all_active_tasks if t.task_type == TaskType.REPAIR and t.is_overdue]),
+            "completed_30d": len([t for t in completed_last_30 if t.task_type == TaskType.REPAIR]),
+            "completed_7d": len([t for t in completed_last_7 if t.task_type == TaskType.REPAIR]),
+        },
+    }
+
+    by_priority = {
+        "low": len([t for t in all_active_tasks if t.priority == TaskPriority.LOW]),
+        "medium": len([t for t in all_active_tasks if t.priority == TaskPriority.MEDIUM]),
+        "high": len([t for t in all_active_tasks if t.priority == TaskPriority.HIGH]),
+        "urgent": len([t for t in all_active_tasks if t.priority == TaskPriority.URGENT]),
+    }
+
+    staff_performance = []
+    staff_users = db.query(User).filter(
+        User.role.in_([UserRole.ADMIN.value, UserRole.STAFF.value]),
+        User.is_active == True,
+    ).all()
+
+    for staff in staff_users:
+        staff_completed = len([t for t in completed_last_30 if t.assigned_to_id == staff.id])
+        staff_active = len([t for t in all_active_tasks if t.assigned_to_id == staff.id])
+        staff_overdue = len([t for t in all_active_tasks if t.assigned_to_id == staff.id and t.is_overdue])
+        staff_performance.append({
+            "user_id": staff.id,
+            "user_name": staff.full_name,
+            "role": staff.role.value,
+            "active_tasks": staff_active,
+            "completed_last_30d": staff_completed,
+            "overdue_tasks": staff_overdue,
+        })
+
+    devices_with_multiple_tasks = []
+    task_counts = {}
+    for task in all_active_tasks:
+        if task.device_id not in task_counts:
+            task_counts[task.device_id] = []
+        task_counts[task.device_id].append(task)
+
+    for device_id, tasks in task_counts.items():
+        if len(tasks) > 1:
+            device = db.query(Device).filter(Device.id == device_id).first()
+            devices_with_multiple_tasks.append({
+                "device_id": device_id,
+                "device_name": device.name if device else None,
+                "device_serial": device.serial_number if device else None,
+                "device_status": device.status.value if device and device.status else None,
+                "task_count": len(tasks),
+                "tasks": [{
+                    "id": t.id,
+                    "type": t.task_type.value,
+                    "status": t.status.value,
+                    "priority": t.priority.value,
+                } for t in tasks],
+            })
+
+    stats = {
+        "summary": {
+            "total_active": len(all_active_tasks),
+            "pending": len(pending_tasks),
+            "claimed": len(claimed_tasks),
+            "in_progress": len(in_progress_tasks),
+            "overdue": len(overdue_tasks),
+            "completed_last_7d": len(completed_last_7),
+            "completed_last_30d": len(completed_last_30),
+        },
+        "by_type": by_type,
+        "by_priority": by_priority,
+        "staff_performance": staff_performance,
+        "devices_with_multiple_tasks": devices_with_multiple_tasks,
+    }
+
+    return APIResponse(data=stats)
+
+
+@router.get("/stats/my", response_model=APIResponse)
+@require_role([UserRole.ADMIN, UserRole.STAFF])
+async def get_my_task_stats(
+    current_user: User = Depends(get_current_active_user),
+    db: Session = Depends(get_db),
+):
+    _update_overdue_tasks(db)
+    now = datetime.now(timezone.utc)
+    thirty_days_ago = now - timedelta(days=30)
+
+    my_tasks = db.query(MaintenanceTask).filter(
+        MaintenanceTask.assigned_to_id == current_user.id
+    ).all()
+
+    my_active = [t for t in my_tasks if t.status not in [TaskStatus.COMPLETED, TaskStatus.CANCELLED]]
+    my_pending = [t for t in my_active if t.status == TaskStatus.PENDING]
+    my_claimed = [t for t in my_active if t.status == TaskStatus.CLAIMED]
+    my_in_progress = [t for t in my_active if t.status == TaskStatus.IN_PROGRESS]
+    my_overdue = [t for t in my_active if t.is_overdue]
+
+    my_completed_30d = [t for t in my_tasks if t.status == TaskStatus.COMPLETED and t.completed_date and _ensure_aware(t.completed_date) >= thirty_days_ago]
+
+    stats = {
+        "summary": {
+            "total_assigned": len(my_tasks),
+            "active": len(my_active),
+            "pending": len(my_pending),
+            "claimed": len(my_claimed),
+            "in_progress": len(my_in_progress),
+            "overdue": len(my_overdue),
+            "completed_last_30d": len(my_completed_30d),
+        },
+        "by_type": {
+            "maintenance": {
+                "active": len([t for t in my_active if t.task_type == TaskType.MAINTENANCE]),
+                "completed": len([t for t in my_completed_30d if t.task_type == TaskType.MAINTENANCE]),
+            },
+            "disinfection": {
+                "active": len([t for t in my_active if t.task_type == TaskType.DISINFECTION]),
+                "completed": len([t for t in my_completed_30d if t.task_type == TaskType.DISINFECTION]),
+            },
+            "repair": {
+                "active": len([t for t in my_active if t.task_type == TaskType.REPAIR]),
+                "completed": len([t for t in my_completed_30d if t.task_type == TaskType.REPAIR]),
+            },
+        },
+        "by_priority": {
+            "low": len([t for t in my_active if t.priority == TaskPriority.LOW]),
+            "medium": len([t for t in my_active if t.priority == TaskPriority.MEDIUM]),
+            "high": len([t for t in my_active if t.priority == TaskPriority.HIGH]),
+            "urgent": len([t for t in my_active if t.priority == TaskPriority.URGENT]),
+        },
+    }
+
+    return APIResponse(data=stats)
