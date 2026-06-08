@@ -60,3 +60,14 @@ from .customer_credit_note import (
     CustomerRiskSummary,
     RiskSummaryItem,
 )
+from .device_import import (
+    BatchDeviceItem,
+    BatchImportPreviewRequest,
+    BatchImportPreviewResponse,
+    BatchImportConfirmRequest,
+    ImportItemResponse,
+    ImportBatchResponse,
+    ImportBatchDetailResponse,
+    ImportItemPreview,
+    ValidationErrorDetail,
+)

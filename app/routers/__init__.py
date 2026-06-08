@@ -14,3 +14,4 @@ from .reservations import router as reservations_router
 from .quotations import router as quotations_router
 from .device_transfers import router as device_transfers_router
 from .customer_credit_notes import router as customer_credit_notes_router
+from .device_imports import router as device_imports_router

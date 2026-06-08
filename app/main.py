@@ -24,6 +24,7 @@ from .routers import (
     quotations_router,
     device_transfers_router,
     customer_credit_notes_router,
+    device_imports_router,
 )
 from .models.contract import Contract, ContractStatus
 from .models.device import DeviceStatus
@@ -61,6 +62,7 @@ app.include_router(reservations_router)
 app.include_router(quotations_router)
 app.include_router(device_transfers_router)
 app.include_router(customer_credit_notes_router)
+app.include_router(device_imports_router)
 
 
 @app.middleware("http")
