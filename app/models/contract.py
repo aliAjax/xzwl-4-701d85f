@@ -3,6 +3,7 @@ from sqlalchemy.sql import func
 from sqlalchemy.orm import relationship
 import enum
 from datetime import datetime, timedelta, timezone
+from typing import Optional
 
 from ..database import Base
 from ..config import settings
@@ -68,6 +69,21 @@ class Contract(Base):
         delta = self.actual_return_date - self.end_date
         return delta.days
 
+    def calculate_estimated_overdue_days(self, as_of: Optional[datetime] = None) -> int:
+        if self.actual_return_date:
+            return self.calculate_overdue_days()
+        now = as_of or datetime.now(timezone.utc)
+        if now <= self.end_date:
+            return 0
+        delta = now - self.end_date
+        return delta.days
+
+    def calculate_estimated_overdue_fee(self, as_of: Optional[datetime] = None) -> float:
+        overdue_days = self.calculate_estimated_overdue_days(as_of)
+        if overdue_days <= settings.OVERDUE_GRACE_PERIOD_DAYS:
+            return 0.0
+        return (overdue_days - settings.OVERDUE_GRACE_PERIOD_DAYS) * settings.OVERDUE_DAILY_RATE * len(self.items)
+
     def calculate_total_amount(self) -> float:
         total = 0.0
         for item in self.items:
@@ -93,6 +109,13 @@ class Contract(Base):
 
     def can_return(self) -> bool:
         return self.status in [ContractStatus.ACTIVE, ContractStatus.OVERDUE, ContractStatus.RENEWED]
+
+    def calculate_days_until_expiry(self, as_of: Optional[datetime] = None) -> int:
+        if self.actual_return_date:
+            return 0
+        now = as_of or datetime.now(timezone.utc)
+        delta = self.end_date - now
+        return max(0, delta.days + (1 if delta.seconds > 0 else 0))
 
 
 class ContractItem(Base):

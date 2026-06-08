@@ -18,8 +18,10 @@ from ..schemas import (
     ContractStatusUpdate,
     RenewContractRequest,
     ReturnContractRequest,
+    OverdueRefreshResponse,
     APIResponse,
     PaginatedResponse,
+    CustomerBasicInfo,
 )
 from ..routers.customer_credit_notes import get_customer_risk_summary_sync
 from ..schemas.customer_credit_note import CustomerRiskSummary
@@ -29,6 +31,7 @@ from ..core import (
     AuditLogger,
     DeviceLockService,
     InventoryCommitmentService,
+    OverdueRefreshService,
     AuditAction,
 )
 from ..models.inventory_commitment import CommitmentType
@@ -46,7 +49,10 @@ def get_contract_dict(contract: Contract) -> dict:
     contract_dict = {c.name: getattr(contract, c.name) for c in contract.__table__.columns}
     contract_dict["rental_days"] = contract.calculate_rental_days()
     contract_dict["overdue_days"] = contract.calculate_overdue_days()
+    contract_dict["days_until_expiry"] = contract.calculate_days_until_expiry()
     contract_dict["items"] = contract.items
+    if contract.customer:
+        contract_dict["customer"] = CustomerBasicInfo.model_validate(contract.customer).model_dump()
     return contract_dict
 
 
@@ -64,6 +70,7 @@ async def list_contracts(
     end_date_to: Optional[date] = None,
     contract_number: Optional[str] = None,
     is_overdue: Optional[bool] = None,
+    expiring_within_days: Optional[int] = None,
     current_user: User = Depends(get_current_active_user),
     db: Session = Depends(get_db),
 ):
@@ -72,6 +79,17 @@ async def list_contracts(
         query = query.filter(Contract.customer_id == current_user.id)
     elif customer_id:
         query = query.filter(Contract.customer_id == customer_id)
+    if expiring_within_days is not None:
+        if expiring_within_days < 1:
+            raise HTTPException(status_code=400, detail="expiring_within_days must be at least 1")
+        now = datetime.now(timezone.utc)
+        expiry_cutoff = now + timedelta(days=expiring_within_days)
+        query = query.filter(
+            Contract.status.in_([ContractStatus.ACTIVE, ContractStatus.RENEWED]),
+            Contract.actual_return_date.is_(None),
+            Contract.end_date >= now,
+            Contract.end_date <= expiry_cutoff,
+        )
     if status:
         query = query.filter(Contract.status == status)
     if start_date_from:
@@ -104,7 +122,7 @@ async def list_contracts(
             query = query.filter(~overdue_condition)
 
     total = query.count()
-    contracts = query.order_by(Contract.created_at.desc()).offset((page - 1) * per_page).limit(per_page).all()
+    contracts = query.order_by(Contract.end_date.asc()).offset((page - 1) * per_page).limit(per_page).all()
 
     response_data = [get_contract_dict(c) for c in contracts]
 
@@ -559,6 +577,46 @@ async def calculate_overdue_fees(
         "daily_rate": 50.0,
         "devices_count": len(contract.items),
     })
+
+
+@router.post("/refresh-overdue", response_model=APIResponse[OverdueRefreshResponse])
+@require_role([UserRole.ADMIN, UserRole.STAFF])
+async def refresh_overdue_contracts(
+    request: Request,
+    current_user: User = Depends(get_current_active_user),
+    db: Session = Depends(get_db),
+):
+    refresh_service = OverdueRefreshService(db)
+    results, summary = refresh_service.refresh_all(
+        user=current_user,
+        ip_address=request.client.host if request.client else None,
+    )
+
+    response_data = OverdueRefreshResponse(
+        summary=summary,
+        details=results,
+    )
+
+    audit_logger = AuditLogger(db)
+    audit_logger.log(
+        action=AuditAction.UPDATE,
+        resource_type="contract",
+        resource_id="batch",
+        user=current_user,
+        new_values=summary,
+        description=(
+            f"Batch overdue refresh completed. "
+            f"Processed {summary['total_contracts_processed']} contracts, "
+            f"{summary['total_status_changed']} status changed, "
+            f"{summary['total_fee_updated']} fees updated."
+        ),
+        ip_address=request.client.host if request.client else None,
+    )
+
+    return APIResponse(
+        message="Overdue refresh completed successfully",
+        data=response_data,
+    )
 
 
 @router.delete("/{contract_id}", response_model=APIResponse)

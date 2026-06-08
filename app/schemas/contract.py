@@ -1,9 +1,20 @@
 from pydantic import BaseModel, Field
-from typing import Optional, List
+from typing import Optional, List, Dict, Any
 from datetime import datetime, timedelta
 
 from ..models.contract import ContractStatus
 from .customer_credit_note import CustomerRiskSummary
+
+
+class CustomerBasicInfo(BaseModel):
+    id: int
+    full_name: str
+    phone: Optional[str]
+    email: str
+    address: Optional[str]
+
+    class Config:
+        from_attributes = True
 
 
 class ContractItemBase(BaseModel):
@@ -87,10 +98,42 @@ class ContractResponse(BaseModel):
     notes: Optional[str]
     rental_days: Optional[int] = None
     overdue_days: Optional[int] = None
+    days_until_expiry: Optional[int] = None
     items: List[ContractItemResponse] = []
     created_at: datetime
     updated_at: Optional[datetime]
     customer_risk_summary: Optional[CustomerRiskSummary] = None
+    customer: Optional[CustomerBasicInfo] = None
 
     class Config:
         from_attributes = True
+
+
+class OverdueRefreshDetail(BaseModel):
+    contract_id: int
+    contract_number: str
+    old_status: str
+    new_status: str
+    old_overdue_fee: float
+    new_overdue_fee: float
+    overdue_days: int
+    status_changed: bool
+    fee_updated: bool
+    audit_logged: bool
+
+    class Config:
+        from_attributes = True
+
+
+class OverdueRefreshSummary(BaseModel):
+    total_contracts_processed: int
+    total_status_changed: int
+    total_fee_updated: int
+    total_audit_logged: int
+    total_estimated_fee: float
+    refresh_timestamp: datetime
+
+
+class OverdueRefreshResponse(BaseModel):
+    summary: OverdueRefreshSummary
+    details: List[OverdueRefreshDetail]
