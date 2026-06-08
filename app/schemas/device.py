@@ -1,9 +1,32 @@
 from pydantic import BaseModel, Field
-from typing import Optional
+from typing import Optional, List
 from datetime import datetime
+import enum
 
 from ..models.device import DeviceStatus
 from .warehouse import WarehouseResponse
+
+
+class TimelineType(str, enum.Enum):
+    DISINFECTION = "disinfection"
+    MAINTENANCE = "maintenance"
+    REPAIR = "repair"
+    LOCK = "lock"
+    RESERVATION = "reservation"
+    TRANSFER = "transfer"
+    HANDOVER = "handover"
+
+
+class TimelineItemResponse(BaseModel):
+    id: int
+    type: TimelineType
+    status: str
+    occurred_at: datetime
+    operator: Optional[str] = None
+    description: str
+
+    class Config:
+        from_attributes = True
 
 
 class DeviceCategoryBase(BaseModel):

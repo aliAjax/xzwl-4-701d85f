@@ -8,6 +8,8 @@ from .device import (
     DeviceUpdate,
     DeviceResponse,
     DeviceStatusUpdate,
+    TimelineType,
+    TimelineItemResponse,
 )
 from .contract import (
     ContractCreate,

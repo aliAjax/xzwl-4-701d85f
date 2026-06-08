@@ -1,6 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException, status, Request
 from sqlalchemy.orm import Session
-from typing import Optional
+from sqlalchemy import union_all, select, literal, String, Integer, DateTime, case, func
+from typing import Optional, List
 from math import ceil
 from datetime import datetime, timezone, timedelta
 
@@ -8,6 +9,13 @@ from ..database import get_db
 from ..models.user import User, UserRole
 from ..models.device import Device, DeviceStatus, DeviceCategory
 from ..models.warehouse import Warehouse
+from ..models.disinfection import DisinfectionRecord
+from ..models.maintenance import MaintenanceRecord
+from ..models.repair import RepairRecord
+from ..models.device_lock import DeviceLock
+from ..models.reservation import Reservation
+from ..models.device_transfer import DeviceTransfer
+from ..models.handover import Handover
 from ..schemas import (
     DeviceCreate,
     DeviceUpdate,
@@ -15,6 +23,8 @@ from ..schemas import (
     DeviceStatusUpdate,
     APIResponse,
     PaginatedResponse,
+    TimelineType,
+    TimelineItemResponse,
 )
 from ..core import get_current_active_user, require_role, AuditLogger, DeviceLockService
 
@@ -319,3 +329,197 @@ async def check_device_availability(device_id: int, db: Session = Depends(get_db
         "needs_maintenance": device.needs_maintenance(),
         "last_disinfection_date": device.last_disinfection_date,
     })
+
+
+@router.get("/{device_id}/timeline", response_model=PaginatedResponse[TimelineItemResponse])
+async def get_device_timeline(
+    device_id: int,
+    page: int = 1,
+    per_page: int = 20,
+    record_type: Optional[TimelineType] = None,
+    db: Session = Depends(get_db),
+):
+    device = db.query(Device).filter(Device.id == device_id).first()
+    if not device:
+        raise HTTPException(status_code=404, detail="Device not found")
+
+    queries = []
+
+    if not record_type or record_type == TimelineType.DISINFECTION:
+        disinfection_query = select(
+            DisinfectionRecord.id.label("record_id"),
+            literal("disinfection", type_=String).label("record_type"),
+            case(
+                (DisinfectionRecord.is_qualified == True, literal("合格", type_=String)),
+                else_=literal("不合格", type_=String)
+            ).label("status"),
+            DisinfectionRecord.disinfection_date.label("occurred_at"),
+            DisinfectionRecord.operator_name.label("operator_name"),
+            literal(None, type_=Integer).label("user_id"),
+            (DisinfectionRecord.disinfectant_type + "消毒").label("description"),
+        ).where(DisinfectionRecord.device_id == device_id)
+        queries.append(disinfection_query)
+
+    if not record_type or record_type == TimelineType.MAINTENANCE:
+        maintenance_query = select(
+            MaintenanceRecord.id.label("record_id"),
+            literal("maintenance", type_=String).label("record_type"),
+            MaintenanceRecord.status.label("status"),
+            case(
+                (MaintenanceRecord.actual_date != None, MaintenanceRecord.actual_date),
+                else_=MaintenanceRecord.scheduled_date
+            ).label("occurred_at"),
+            MaintenanceRecord.technician_name.label("operator_name"),
+            literal(None, type_=Integer).label("user_id"),
+            MaintenanceRecord.description.label("description"),
+        ).where(MaintenanceRecord.device_id == device_id)
+        queries.append(maintenance_query)
+
+    if not record_type or record_type == TimelineType.REPAIR:
+        repair_query = select(
+            RepairRecord.id.label("record_id"),
+            literal("repair", type_=String).label("record_type"),
+            RepairRecord.status.label("status"),
+            case(
+                (RepairRecord.repair_complete_date != None, RepairRecord.repair_complete_date),
+                else_=RepairRecord.report_date
+            ).label("occurred_at"),
+            literal(None, type_=String).label("operator_name"),
+            case(
+                (RepairRecord.handled_by_id != None, RepairRecord.handled_by_id),
+                else_=RepairRecord.reported_by_id
+            ).label("user_id"),
+            RepairRecord.fault_description.label("description"),
+        ).where(RepairRecord.device_id == device_id)
+        queries.append(repair_query)
+
+    if not record_type or record_type == TimelineType.LOCK:
+        now = datetime.now(timezone.utc)
+        lock_query = select(
+            DeviceLock.id.label("record_id"),
+            literal("lock", type_=String).label("record_type"),
+            case(
+                (DeviceLock.released_at != None, literal("已释放", type_=String)),
+                (DeviceLock.is_active == 0, literal("已释放", type_=String)),
+                (DeviceLock.expires_at < now, literal("已过期", type_=String)),
+                else_=literal("锁定中", type_=String)
+            ).label("status"),
+            case(
+                (DeviceLock.released_at != None, DeviceLock.released_at),
+                else_=DeviceLock.locked_at
+            ).label("occurred_at"),
+            literal(None, type_=String).label("operator_name"),
+            DeviceLock.user_id.label("user_id"),
+            case(
+                (DeviceLock.purpose != None, DeviceLock.purpose),
+                else_=literal("设备锁定", type_=String)
+            ).label("description"),
+        ).where(DeviceLock.device_id == device_id)
+        queries.append(lock_query)
+
+    if not record_type or record_type == TimelineType.RESERVATION:
+        reservation_query = select(
+            Reservation.id.label("record_id"),
+            literal("reservation", type_=String).label("record_type"),
+            Reservation.status.label("status"),
+            case(
+                (Reservation.cancelled_at != None, Reservation.cancelled_at),
+                (Reservation.confirmed_at != None, Reservation.confirmed_at),
+                else_=Reservation.created_at
+            ).label("occurred_at"),
+            literal(None, type_=String).label("operator_name"),
+            Reservation.customer_id.label("user_id"),
+            case(
+                (Reservation.purpose != None, Reservation.purpose),
+                else_=literal("设备预约", type_=String)
+            ).label("description"),
+        ).where(Reservation.device_id == device_id)
+        queries.append(reservation_query)
+
+    if not record_type or record_type == TimelineType.TRANSFER:
+        transfer_query = select(
+            DeviceTransfer.id.label("record_id"),
+            literal("transfer", type_=String).label("record_type"),
+            DeviceTransfer.status.label("status"),
+            case(
+                (DeviceTransfer.completed_at != None, DeviceTransfer.completed_at),
+                else_=DeviceTransfer.created_at
+            ).label("occurred_at"),
+            literal(None, type_=String).label("operator_name"),
+            case(
+                (DeviceTransfer.completed_by_id != None, DeviceTransfer.completed_by_id),
+                else_=DeviceTransfer.created_by_id
+            ).label("user_id"),
+            (DeviceTransfer.from_location + " -> " + DeviceTransfer.to_location).label("description"),
+        ).where(DeviceTransfer.device_id == device_id)
+        queries.append(transfer_query)
+
+    if not record_type or record_type == TimelineType.HANDOVER:
+        handover_query = select(
+            Handover.id.label("record_id"),
+            literal("handover", type_=String).label("record_type"),
+            Handover.status.label("status"),
+            case(
+                (Handover.customer_confirmed_at != None, Handover.customer_confirmed_at),
+                (Handover.staff_confirmed_at != None, Handover.staff_confirmed_at),
+                else_=Handover.created_at
+            ).label("occurred_at"),
+            literal(None, type_=String).label("operator_name"),
+            Handover.created_by_id.label("user_id"),
+            case(
+                (Handover.handover_type == "outbound", literal("设备出库", type_=String)),
+                else_=literal("设备归还", type_=String)
+            ).label("description"),
+        ).where(Handover.device_id == device_id)
+        queries.append(handover_query)
+
+    if not queries:
+        return PaginatedResponse(
+            data=[],
+            total=0,
+            page=page,
+            per_page=per_page,
+            total_pages=0,
+        )
+
+    union_query = union_all(*queries).order_by(None)
+
+    subquery = union_query.alias("timeline")
+
+    count_query = select(func.count()).select_from(subquery)
+    total = db.execute(count_query).scalar() or 0
+
+    ordered_query = select(subquery).select_from(subquery).order_by(
+        subquery.c.occurred_at.desc()
+    ).offset((page - 1) * per_page).limit(per_page)
+
+    results = db.execute(ordered_query).fetchall()
+
+    user_ids = [row.user_id for row in results if row.user_id is not None]
+    users = {}
+    if user_ids:
+        user_records = db.query(User).filter(User.id.in_(user_ids)).all()
+        users = {u.id: u.full_name for u in user_records}
+
+    timeline_items = []
+    for row in results:
+        operator = row.operator_name
+        if not operator and row.user_id:
+            operator = users.get(row.user_id)
+
+        timeline_items.append(TimelineItemResponse(
+            id=row.record_id,
+            type=row.record_type,
+            status=row.status,
+            occurred_at=row.occurred_at,
+            operator=operator,
+            description=row.description or "",
+        ))
+
+    return PaginatedResponse(
+        data=timeline_items,
+        total=total,
+        page=page,
+        per_page=per_page,
+        total_pages=ceil(total / per_page) if per_page > 0 else 0,
+    )
