@@ -17,6 +17,8 @@ class BatchDeviceItem(BaseModel):
     notes: Optional[str] = None
     category_id: int = Field(..., gt=0)
     category_name: Optional[str] = None
+    warehouse_id: Optional[int] = Field(None, gt=0)
+    warehouse_code: Optional[str] = Field(None, max_length=50)
 
 
 class BatchImportPreviewRequest(BaseModel):
@@ -65,6 +67,9 @@ class ImportItemResponse(BaseModel):
     purchase_price: Optional[float]
     category_id: Optional[int]
     category_name: Optional[str]
+    warehouse_id: Optional[int]
+    warehouse_code: Optional[str]
+    warehouse_name: Optional[str]
     status: ImportItemStatus
     validation_errors: Optional[List[ValidationErrorDetail]]
     error_message: Optional[str]

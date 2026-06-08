@@ -8,6 +8,7 @@ import uuid
 from ..database import get_db
 from ..models.user import User, UserRole
 from ..models.device import Device, DeviceStatus, DeviceCategory
+from ..models.warehouse import Warehouse, WarehouseStatus
 from ..models.device_import import (
     DeviceImport,
     DeviceImportItem,
@@ -87,6 +88,25 @@ def validate_import_items(
                 "deposit_amount": cat[3],
             }
 
+    warehouse_ids = [item.get("warehouse_id") for item in items if item.get("warehouse_id")]
+    warehouse_codes = [item.get("warehouse_code", "").strip() for item in items if item.get("warehouse_code")]
+    warehouses_by_id = {}
+    warehouses_by_code = {}
+    if warehouse_ids or warehouse_codes:
+        warehouse_query = db.query(Warehouse)
+        filters = []
+        if warehouse_ids:
+            filters.append(Warehouse.id.in_(warehouse_ids))
+        if warehouse_codes:
+            filters.append(Warehouse.code.in_(warehouse_codes))
+        if filters:
+            from sqlalchemy import or_
+            warehouse_query = warehouse_query.filter(or_(*filters))
+        warehouses = warehouse_query.all()
+        for wh in warehouses:
+            warehouses_by_id[wh.id] = wh
+            warehouses_by_code[wh.code] = wh
+
     validated_items = []
     for idx, item in enumerate(items):
         row_index = start_index + idx
@@ -96,6 +116,8 @@ def validate_import_items(
         category_id = item.get("category_id")
         purchase_date_str = item.get("purchase_date")
         purchase_price = item.get("purchase_price")
+        warehouse_id = item.get("warehouse_id")
+        warehouse_code = item.get("warehouse_code", "").strip() if item.get("warehouse_code") else None
 
         if not serial_number:
             errors.append(ValidationErrorDetail(
@@ -169,6 +191,50 @@ def validate_import_items(
                 message="采购价格不能为负数"
             ))
 
+        warehouse = None
+        resolved_warehouse_id = None
+        resolved_warehouse_code = None
+        resolved_warehouse_name = None
+        if warehouse_id and warehouse_code:
+            errors.append(ValidationErrorDetail(
+                error_type=ValidationErrorType.WAREHOUSE_ID_AND_CODE_BOTH_PROVIDED,
+                field="warehouse",
+                message="warehouse_id 和 warehouse_code 不能同时提供，请选择其中一种方式"
+            ))
+        elif warehouse_id:
+            warehouse = warehouses_by_id.get(warehouse_id)
+            if not warehouse:
+                errors.append(ValidationErrorDetail(
+                    error_type=ValidationErrorType.WAREHOUSE_NOT_FOUND,
+                    field="warehouse_id",
+                    message=f"仓库ID '{warehouse_id}' 不存在"
+                ))
+            elif not warehouse.is_active():
+                errors.append(ValidationErrorDetail(
+                    error_type=ValidationErrorType.WAREHOUSE_NOT_ACTIVE,
+                    field="warehouse_id",
+                    message=f"仓库 '{warehouse.name}' 未处于激活状态，当前状态: {warehouse.status}"
+                ))
+        elif warehouse_code:
+            warehouse = warehouses_by_code.get(warehouse_code)
+            if not warehouse:
+                errors.append(ValidationErrorDetail(
+                    error_type=ValidationErrorType.WAREHOUSE_NOT_FOUND,
+                    field="warehouse_code",
+                    message=f"仓库编码 '{warehouse_code}' 不存在"
+                ))
+            elif not warehouse.is_active():
+                errors.append(ValidationErrorDetail(
+                    error_type=ValidationErrorType.WAREHOUSE_NOT_ACTIVE,
+                    field="warehouse_code",
+                    message=f"仓库 '{warehouse.name}' 未处于激活状态，当前状态: {warehouse.status}"
+                ))
+
+        if warehouse:
+            resolved_warehouse_id = warehouse.id
+            resolved_warehouse_code = warehouse.code
+            resolved_warehouse_name = warehouse.name
+
         category_name = existing_categories.get(category_id, {}).get("name") if category_id else None
 
         validated_items.append({
@@ -178,6 +244,9 @@ def validate_import_items(
             "errors": errors,
             "parsed_purchase_date": purchase_date,
             "category_name": category_name,
+            "warehouse_id": resolved_warehouse_id,
+            "warehouse_code": resolved_warehouse_code,
+            "warehouse_name": resolved_warehouse_name,
         })
 
     return validated_items
@@ -237,6 +306,9 @@ async def preview_batch_import(
             notes=item_data.get("notes"),
             category_id=item_data.get("category_id"),
             category_name=validated["category_name"],
+            warehouse_id=validated["warehouse_id"],
+            warehouse_code=validated["warehouse_code"],
+            warehouse_name=validated["warehouse_name"],
             status=validated["status"],
             validation_errors=[e.model_dump() for e in validated["errors"]] if validated["errors"] else None,
             error_message="; ".join([e.message for e in validated["errors"]]) if validated["errors"] else None,
@@ -352,6 +424,10 @@ async def confirm_batch_import(
                 DeviceCategory.id == import_item.category_id
             ).first()
 
+            device_location = import_item.location
+            if not device_location and import_item.warehouse_code:
+                device_location = import_item.warehouse_code
+
             new_device = Device(
                 serial_number=import_item.serial_number,
                 name=import_item.name,
@@ -360,9 +436,10 @@ async def confirm_batch_import(
                 purchase_date=import_item.purchase_date,
                 purchase_price=import_item.purchase_price,
                 current_owner=import_item.current_owner,
-                location=import_item.location,
+                location=device_location,
                 notes=import_item.notes,
                 category_id=import_item.category_id,
+                warehouse_id=import_item.warehouse_id,
                 status=DeviceStatus.AVAILABLE,
             )
 
@@ -460,6 +537,9 @@ async def confirm_batch_import(
             "purchase_price": item.purchase_price,
             "category_id": item.category_id,
             "category_name": item.category_name,
+            "warehouse_id": item.warehouse_id,
+            "warehouse_code": item.warehouse_code,
+            "warehouse_name": item.warehouse_name,
             "status": item.status,
             "validation_errors": item.validation_errors,
             "error_message": item.error_message,
@@ -568,6 +648,9 @@ async def get_import_batch_detail(
             "purchase_price": item.purchase_price,
             "category_id": item.category_id,
             "category_name": item.category_name,
+            "warehouse_id": item.warehouse_id,
+            "warehouse_code": item.warehouse_code,
+            "warehouse_name": item.warehouse_name,
             "status": item.status,
             "validation_errors": item.validation_errors,
             "error_message": item.error_message,

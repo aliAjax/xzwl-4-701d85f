@@ -27,6 +27,9 @@ class ValidationErrorType(str, enum.Enum):
     SERIAL_DUPLICATE_IN_BATCH = "serial_duplicate_in_batch"
     SERIAL_DUPLICATE_IN_DB = "serial_duplicate_in_db"
     CATEGORY_NOT_FOUND = "category_not_found"
+    WAREHOUSE_NOT_FOUND = "warehouse_not_found"
+    WAREHOUSE_NOT_ACTIVE = "warehouse_not_active"
+    WAREHOUSE_ID_AND_CODE_BOTH_PROVIDED = "warehouse_id_and_code_both_provided"
     PURCHASE_DATE_INVALID = "purchase_date_invalid"
     DEPOSIT_MISSING = "deposit_missing"
     RENTAL_RATE_MISSING = "rental_rate_missing"
@@ -79,6 +82,9 @@ class DeviceImportItem(Base):
     notes = Column(Text)
     category_id = Column(Integer)
     category_name = Column(String(100))
+    warehouse_id = Column(Integer)
+    warehouse_code = Column(String(50))
+    warehouse_name = Column(String(100))
 
     status = Column(Enum(ImportItemStatus), default=ImportItemStatus.PENDING, nullable=False)
     validation_errors = Column(JSON)

@@ -31,6 +31,33 @@ def ensure_database_compatibility() -> None:
                 )
             )
 
+    if "device_import_items" in inspector.get_table_names():
+        item_columns = {column["name"] for column in inspector.get_columns("device_import_items")}
+        if "warehouse_id" not in item_columns:
+            with engine.begin() as connection:
+                connection.execute(
+                    text(
+                        "ALTER TABLE device_import_items "
+                        "ADD COLUMN warehouse_id INTEGER"
+                    )
+                )
+        if "warehouse_code" not in item_columns:
+            with engine.begin() as connection:
+                connection.execute(
+                    text(
+                        "ALTER TABLE device_import_items "
+                        "ADD COLUMN warehouse_code VARCHAR(50)"
+                    )
+                )
+        if "warehouse_name" not in item_columns:
+            with engine.begin() as connection:
+                connection.execute(
+                    text(
+                        "ALTER TABLE device_import_items "
+                        "ADD COLUMN warehouse_name VARCHAR(100)"
+                    )
+                )
+
     if "contracts" in inspector.get_table_names():
         contract_columns = {column["name"] for column in inspector.get_columns("contracts")}
         if "commitment_batch_token" not in contract_columns:
