@@ -1,4 +1,4 @@
-from sqlalchemy import create_engine, inspect, text
+from sqlalchemy import create_engine
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker
 from typing import Generator
@@ -14,66 +14,6 @@ engine = create_engine(settings.DATABASE_URL, connect_args=connect_args)
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
 Base = declarative_base()
-
-
-def ensure_database_compatibility() -> None:
-    inspector = inspect(engine)
-    if "device_imports" not in inspector.get_table_names():
-        return
-
-    columns = {column["name"] for column in inspector.get_columns("device_imports")}
-    if "skipped_count" not in columns:
-        with engine.begin() as connection:
-            connection.execute(
-                text(
-                    "ALTER TABLE device_imports "
-                    "ADD COLUMN skipped_count INTEGER NOT NULL DEFAULT 0"
-                )
-            )
-
-    if "device_import_items" in inspector.get_table_names():
-        item_columns = {column["name"] for column in inspector.get_columns("device_import_items")}
-        if "warehouse_id" not in item_columns:
-            with engine.begin() as connection:
-                connection.execute(
-                    text(
-                        "ALTER TABLE device_import_items "
-                        "ADD COLUMN warehouse_id INTEGER"
-                    )
-                )
-        if "warehouse_code" not in item_columns:
-            with engine.begin() as connection:
-                connection.execute(
-                    text(
-                        "ALTER TABLE device_import_items "
-                        "ADD COLUMN warehouse_code VARCHAR(50)"
-                    )
-                )
-        if "warehouse_name" not in item_columns:
-            with engine.begin() as connection:
-                connection.execute(
-                    text(
-                        "ALTER TABLE device_import_items "
-                        "ADD COLUMN warehouse_name VARCHAR(100)"
-                    )
-                )
-
-    if "contracts" in inspector.get_table_names():
-        contract_columns = {column["name"] for column in inspector.get_columns("contracts")}
-        if "commitment_batch_token" not in contract_columns:
-            with engine.begin() as connection:
-                connection.execute(
-                    text(
-                        "ALTER TABLE contracts "
-                        "ADD COLUMN commitment_batch_token VARCHAR(100)"
-                    )
-                )
-                connection.execute(
-                    text(
-                        "CREATE INDEX IF NOT EXISTS ix_contracts_commitment_batch_token "
-                        "ON contracts(commitment_batch_token)"
-                    )
-                )
 
 
 def get_db() -> Generator:

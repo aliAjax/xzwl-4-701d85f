@@ -4,9 +4,10 @@ from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
 from sqlalchemy import func
 from datetime import datetime, timezone
+import logging
 
 from .config import settings
-from .database import engine, Base, SessionLocal, ensure_database_compatibility
+from .database import SessionLocal
 from .routers import (
     auth_router,
     users_router,
@@ -35,8 +36,25 @@ from .routers import (
 from .models.contract import Contract, ContractStatus
 from .models.device import DeviceStatus
 
-Base.metadata.create_all(bind=engine)
-ensure_database_compatibility()
+logger = logging.getLogger(__name__)
+
+
+def run_auto_migrations() -> None:
+    if settings.APP_ENV != "development":
+        return
+    try:
+        from alembic import command
+        from alembic.config import Config as AlembicConfig
+        import os
+
+        alembic_cfg = AlembicConfig(os.path.join(os.getcwd(), "alembic.ini"))
+        command.upgrade(alembic_cfg, "head")
+        logger.info("Auto migrations applied successfully")
+    except Exception as e:
+        logger.warning(f"Auto migrations skipped: {e}")
+
+
+run_auto_migrations()
 
 app = FastAPI(
     title=settings.APP_NAME,
