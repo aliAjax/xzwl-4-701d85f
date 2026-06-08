@@ -7,6 +7,7 @@ from datetime import datetime, timezone, timedelta
 from ..database import get_db
 from ..models.user import User, UserRole
 from ..models.device import Device, DeviceStatus, DeviceCategory
+from ..models.warehouse import Warehouse
 from ..schemas import (
     DeviceCreate,
     DeviceUpdate,
@@ -26,6 +27,7 @@ async def list_devices(
     per_page: int = 20,
     status: Optional[DeviceStatus] = None,
     category_id: Optional[int] = None,
+    warehouse_id: Optional[int] = None,
     search: Optional[str] = None,
     available_only: bool = False,
     db: Session = Depends(get_db),
@@ -35,6 +37,13 @@ async def list_devices(
         query = query.filter(Device.status == status)
     if category_id:
         query = query.filter(Device.category_id == category_id)
+    if warehouse_id:
+        warehouse = db.query(Warehouse).filter(Warehouse.id == warehouse_id).first()
+        if warehouse:
+            query = query.filter(
+                (Device.warehouse_id == warehouse_id) |
+                (Device.location == warehouse.code)
+            )
     if search:
         query = query.filter(
             (Device.serial_number.ilike(f"%{search}%")) |
@@ -53,6 +62,7 @@ async def list_devices(
         device_dict["is_available_for_rent"] = device.is_available_for_rent()
         device_dict["needs_maintenance"] = device.needs_maintenance()
         device_dict["category"] = device.category
+        device_dict["warehouse"] = device.warehouse
         response_data.append(device_dict)
 
     return PaginatedResponse(
@@ -74,6 +84,7 @@ async def get_device(device_id: int, db: Session = Depends(get_db)):
     device_dict["is_available_for_rent"] = device.is_available_for_rent()
     device_dict["needs_maintenance"] = device.needs_maintenance()
     device_dict["category"] = device.category
+    device_dict["warehouse"] = device.warehouse
 
     return APIResponse(data=device_dict)
 
@@ -88,6 +99,7 @@ async def get_device_by_serial(serial_number: str, db: Session = Depends(get_db)
     device_dict["is_available_for_rent"] = device.is_available_for_rent()
     device_dict["needs_maintenance"] = device.needs_maintenance()
     device_dict["category"] = device.category
+    device_dict["warehouse"] = device.warehouse
 
     return APIResponse(data=device_dict)
 
@@ -108,8 +120,17 @@ async def create_device(
     if not category:
         raise HTTPException(status_code=400, detail="Category not found")
 
+    warehouse = None
+    if device_data.warehouse_id:
+        warehouse = db.query(Warehouse).filter(Warehouse.id == device_data.warehouse_id).first()
+        if not warehouse:
+            raise HTTPException(status_code=400, detail="Warehouse not found")
+
     new_device = Device(**device_data.model_dump())
     new_device.status = DeviceStatus.AVAILABLE
+
+    if warehouse and not new_device.location:
+        new_device.location = warehouse.code
 
     if category.disinfection_required:
         new_device.last_disinfection_date = datetime.now(timezone.utc)
@@ -139,6 +160,7 @@ async def create_device(
     device_dict["is_available_for_rent"] = new_device.is_available_for_rent()
     device_dict["needs_maintenance"] = new_device.needs_maintenance()
     device_dict["category"] = new_device.category
+    device_dict["warehouse"] = new_device.warehouse
 
     return APIResponse(message="Device created successfully", data=device_dict)
 
@@ -164,6 +186,14 @@ async def update_device(
     }
 
     update_data = device_data.model_dump(exclude_unset=True)
+
+    if "warehouse_id" in update_data and update_data["warehouse_id"] is not None:
+        warehouse = db.query(Warehouse).filter(Warehouse.id == update_data["warehouse_id"]).first()
+        if not warehouse:
+            raise HTTPException(status_code=400, detail="Warehouse not found")
+        if "location" not in update_data or update_data["location"] is None:
+            update_data["location"] = warehouse.code
+
     for field, value in update_data.items():
         setattr(device, field, value)
 
@@ -184,6 +214,7 @@ async def update_device(
     device_dict["is_available_for_rent"] = device.is_available_for_rent()
     device_dict["needs_maintenance"] = device.needs_maintenance()
     device_dict["category"] = device.category
+    device_dict["warehouse"] = device.warehouse
 
     return APIResponse(message="Device updated successfully", data=device_dict)
 
@@ -227,6 +258,7 @@ async def update_device_status(
     device_dict["is_available_for_rent"] = device.is_available_for_rent()
     device_dict["needs_maintenance"] = device.needs_maintenance()
     device_dict["category"] = device.category
+    device_dict["warehouse"] = device.warehouse
 
     return APIResponse(message="Device status updated successfully", data=device_dict)
 

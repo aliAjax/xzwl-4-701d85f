@@ -23,3 +23,5 @@ from .device_swap import DeviceSwap, DeviceSwapStatus
 from .handover import Handover, HandoverType, HandoverStatus
 from .pricing_rule import PricingRule, TieredDiscount, PricingRuleStatus
 from .task import MaintenanceTask, TaskType, TaskStatus, TaskPriority
+from .warehouse import Warehouse, WarehouseType, WarehouseStatus
+from .inventory_commitment import InventoryCommitment, CommitmentType, CommitmentStatus

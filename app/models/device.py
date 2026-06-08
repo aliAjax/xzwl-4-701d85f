@@ -44,6 +44,10 @@ class Device(Base):
     purchase_price = Column(Float)
     current_owner = Column(String(100))
     location = Column(String(255))
+
+    warehouse_id = Column(Integer, ForeignKey("warehouses.id"))
+    warehouse = relationship("Warehouse", back_populates="devices")
+
     status = Column(Enum(DeviceStatus), default=DeviceStatus.AVAILABLE, nullable=False)
     notes = Column(Text)
 
@@ -65,6 +69,7 @@ class Device(Base):
     reservations = relationship("Reservation", back_populates="device")
     transfers = relationship("DeviceTransfer", back_populates="device")
     handovers = relationship("Handover", back_populates="device")
+    inventory_commitments = relationship("InventoryCommitment", back_populates="device")
 
     def is_available_for_rent(self) -> bool:
         if self.status in [

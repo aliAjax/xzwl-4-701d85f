@@ -19,3 +19,5 @@ from .device_swaps import router as device_swaps_router
 from .handovers import router as handovers_router
 from .pricing_rules import router as pricing_rules_router
 from .tasks import router as tasks_router
+from .warehouses import router as warehouses_router
+from .inventory import router as inventory_router

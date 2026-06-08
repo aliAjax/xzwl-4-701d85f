@@ -29,6 +29,8 @@ from .routers import (
     handovers_router,
     pricing_rules_router,
     tasks_router,
+    warehouses_router,
+    inventory_router,
 )
 from .models.contract import Contract, ContractStatus
 from .models.device import DeviceStatus
@@ -71,6 +73,8 @@ app.include_router(device_swaps_router)
 app.include_router(handovers_router)
 app.include_router(pricing_rules_router)
 app.include_router(tasks_router)
+app.include_router(warehouses_router)
+app.include_router(inventory_router)
 
 
 @app.middleware("http")

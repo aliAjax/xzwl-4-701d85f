@@ -9,4 +9,5 @@ from .security import (
 )
 from .audit import AuditLogger
 from .locking import DeviceLockService
+from .inventory_commitment import InventoryCommitmentService
 from ..models.audit import AuditAction

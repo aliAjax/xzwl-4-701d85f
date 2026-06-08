@@ -3,6 +3,7 @@ from typing import Optional
 from datetime import datetime
 
 from ..models.device import DeviceStatus
+from .warehouse import WarehouseResponse
 
 
 class DeviceCategoryBase(BaseModel):
@@ -51,6 +52,7 @@ class DeviceBase(BaseModel):
     purchase_price: Optional[float] = Field(None, ge=0)
     current_owner: Optional[str] = Field(None, max_length=100)
     location: Optional[str] = Field(None, max_length=255)
+    warehouse_id: Optional[int] = Field(None, gt=0)
     notes: Optional[str] = None
     category_id: int = Field(..., gt=0)
 
@@ -67,6 +69,7 @@ class DeviceUpdate(BaseModel):
     purchase_price: Optional[float] = Field(None, ge=0)
     current_owner: Optional[str] = Field(None, max_length=100)
     location: Optional[str] = Field(None, max_length=255)
+    warehouse_id: Optional[int] = Field(None, gt=0)
     notes: Optional[str] = None
     category_id: Optional[int] = Field(None, gt=0)
 
@@ -86,6 +89,8 @@ class DeviceResponse(BaseModel):
     purchase_price: Optional[float]
     current_owner: Optional[str]
     location: Optional[str]
+    warehouse_id: Optional[int]
+    warehouse: Optional[WarehouseResponse] = None
     status: DeviceStatus
     notes: Optional[str]
     category_id: int
