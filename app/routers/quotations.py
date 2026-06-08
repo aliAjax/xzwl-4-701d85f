@@ -484,6 +484,34 @@ async def convert_quotation_to_contract(
 
         end_date = convert_data.start_date + timedelta(days=quotation.rental_days - 1)
 
+        from ..models.reservation import Reservation
+
+        for device_id in all_device_ids:
+            device = device_id_to_device[device_id]
+
+            if Reservation.check_time_conflict(db, device_id, convert_data.start_date, end_date):
+                lock_service.unlock_by_token(lock_token, current_user)
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Device {device.serial_number} has a conflicting reservation during the rental period",
+                )
+
+            active_contract = (
+                db.query(ContractItem)
+                .join(Contract)
+                .filter(
+                    ContractItem.device_id == device_id,
+                    Contract.status.in_([ContractStatus.ACTIVE, ContractStatus.RENEWED, ContractStatus.OVERDUE]),
+                )
+                .first()
+            )
+            if active_contract:
+                lock_service.unlock_by_token(lock_token, current_user)
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Device {device.serial_number} is currently in use by an active contract",
+                )
+
         db.begin_nested()
         try:
             new_contract = Contract(
@@ -492,31 +520,41 @@ async def convert_quotation_to_contract(
                 created_by_id=current_user.id,
                 start_date=convert_data.start_date,
                 end_date=end_date,
-                total_amount=quotation.total_rental_fee,
-                deposit_amount=quotation.total_deposit,
-                discount_amount=quotation.discount_amount,
-                final_amount=quotation.estimated_total,
                 notes=convert_data.notes or quotation.notes,
                 status=ContractStatus.DRAFT,
             )
             db.add(new_contract)
             db.flush()
 
+            total_amount = 0.0
+            deposit_amount = 0.0
+
             for item in convert_data.items:
                 q_item = quotation_item_map[item.quotation_item_id]
                 for device_id in item.device_ids:
                     device = device_id_to_device[device_id]
-                    subtotal = q_item.daily_rate * quotation.rental_days * 1
+                    daily_rate = q_item.daily_rate
+                    subtotal = daily_rate * quotation.rental_days * 1
 
                     contract_item = ContractItem(
                         contract_id=new_contract.id,
                         device_id=device_id,
-                        daily_rate=q_item.daily_rate,
+                        daily_rate=daily_rate,
                         quantity=1,
                         subtotal=subtotal,
                     )
                     db.add(contract_item)
                     new_contract.items.append(contract_item)
+                    total_amount += subtotal
+                    deposit_amount += q_item.deposit_amount * 1
+
+            discount_amount = total_amount * (quotation.discount_rate / 100)
+            final_amount = max(0, total_amount - discount_amount)
+
+            new_contract.total_amount = round(total_amount, 2)
+            new_contract.deposit_amount = round(deposit_amount, 2)
+            new_contract.discount_amount = round(discount_amount, 2)
+            new_contract.final_amount = round(final_amount, 2)
 
             db.commit()
             db.refresh(new_contract)
@@ -537,6 +575,16 @@ async def convert_quotation_to_contract(
         resource_type="quotation",
         resource_id=str(quotation_id),
         user=current_user,
+        old_values={
+            "quotation_id": quotation_id,
+            "quotation_number": quotation.quotation_number,
+            "status": quotation.status.value,
+            "total_rental_fee": quotation.total_rental_fee,
+            "total_deposit": quotation.total_deposit,
+            "discount_rate": quotation.discount_rate,
+            "discount_amount": quotation.discount_amount,
+            "estimated_total": quotation.estimated_total,
+        },
         new_values={
             "quotation_id": quotation_id,
             "quotation_number": quotation.quotation_number,
@@ -545,6 +593,7 @@ async def convert_quotation_to_contract(
             "customer_id": new_contract.customer_id,
             "total_amount": new_contract.total_amount,
             "deposit_amount": new_contract.deposit_amount,
+            "discount_rate": quotation.discount_rate,
             "discount_amount": new_contract.discount_amount,
             "final_amount": new_contract.final_amount,
             "start_date": new_contract.start_date,
@@ -571,6 +620,8 @@ async def convert_quotation_to_contract(
             "customer_id": new_contract.customer_id,
             "total_amount": new_contract.total_amount,
             "deposit_amount": new_contract.deposit_amount,
+            "discount_amount": new_contract.discount_amount,
+            "final_amount": new_contract.final_amount,
             "source_quotation_id": quotation_id,
             "source_quotation_number": quotation.quotation_number,
         },
