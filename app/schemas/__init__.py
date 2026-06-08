@@ -96,3 +96,15 @@ from .pricing_rule import (
     TrialCalcItem,
     TrialCalcItemResult,
 )
+from .task import (
+    TaskCreate,
+    TaskUpdate,
+    TaskClaim,
+    TaskStart,
+    TaskComplete,
+    TaskCancel,
+    TaskGenerateRequest,
+    TaskResponse,
+    TaskDetailResponse,
+    TaskGenerateResult,
+)

@@ -40,6 +40,13 @@ class AuditAction(str, enum.Enum):
     HANDOVER_UPDATE = "handover_update"
     HANDOVER_CONFIRM = "handover_confirm"
     HANDOVER_CANCEL = "handover_cancel"
+    TASK_CREATE = "task_create"
+    TASK_UPDATE = "task_update"
+    TASK_CLAIM = "task_claim"
+    TASK_START = "task_start"
+    TASK_COMPLETE = "task_complete"
+    TASK_CANCEL = "task_cancel"
+    TASK_GENERATE = "task_generate"
 
 
 class AuditLog(Base):
