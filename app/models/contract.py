@@ -114,6 +114,10 @@ class Contract(Base):
         if self.actual_return_date:
             return 0
         now = as_of or datetime.now(timezone.utc)
+        if self.end_date.tzinfo is None and now.tzinfo is not None:
+            now = now.replace(tzinfo=None)
+        elif self.end_date.tzinfo is not None and now.tzinfo is None:
+            now = now.replace(tzinfo=timezone.utc)
         delta = self.end_date - now
         return max(0, delta.days + (1 if delta.seconds > 0 else 0))
 

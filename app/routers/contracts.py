@@ -1,6 +1,6 @@
 from fastapi import APIRouter, Depends, HTTPException, status, Request
 from sqlalchemy.orm import Session
-from sqlalchemy import and_, or_, func
+from sqlalchemy import and_, or_
 from typing import Optional
 from math import ceil
 from datetime import datetime, timezone, timedelta, date
@@ -45,6 +45,14 @@ def generate_contract_number() -> str:
     return f"MR{now.strftime('%Y%m%d')}{uuid.uuid4().hex[:8].upper()}"
 
 
+def get_query_now(db: Session) -> datetime:
+    now = datetime.now(timezone.utc)
+    bind = db.get_bind()
+    if bind and bind.dialect.name == "sqlite":
+        return now.replace(tzinfo=None)
+    return now
+
+
 def get_contract_dict(contract: Contract) -> dict:
     contract_dict = {c.name: getattr(contract, c.name) for c in contract.__table__.columns}
     contract_dict["rental_days"] = contract.calculate_rental_days()
@@ -82,11 +90,13 @@ async def list_contracts(
     if expiring_within_days is not None:
         if expiring_within_days < 1:
             raise HTTPException(status_code=400, detail="expiring_within_days must be at least 1")
+        now = get_query_now(db)
+        expiry_cutoff = now + timedelta(days=expiring_within_days)
         query = query.filter(
             Contract.status.in_([ContractStatus.ACTIVE, ContractStatus.RENEWED]),
             Contract.actual_return_date.is_(None),
-            Contract.end_date >= func.now(),
-            Contract.end_date <= func.now() + timedelta(days=expiring_within_days),
+            Contract.end_date >= now,
+            Contract.end_date <= expiry_cutoff,
         )
     if status:
         query = query.filter(Contract.status == status)
@@ -105,11 +115,12 @@ async def list_contracts(
     if contract_number:
         query = query.filter(Contract.contract_number.ilike(f"%{contract_number}%"))
     if is_overdue is not None:
+        now = get_query_now(db)
         overdue_condition = or_(
             Contract.status == ContractStatus.OVERDUE,
             and_(
                 Contract.status.in_([ContractStatus.ACTIVE, ContractStatus.RENEWED]),
-                Contract.end_date < func.now(),
+                Contract.end_date < now,
                 Contract.actual_return_date.is_(None),
             ),
         )
