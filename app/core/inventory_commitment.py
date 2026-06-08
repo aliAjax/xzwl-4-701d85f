@@ -1,25 +1,19 @@
 from typing import Optional, List, Tuple, Dict
 from sqlalchemy.orm import Session
-from sqlalchemy import and_, or_, select, func
 from datetime import datetime, timezone, timedelta
 import uuid
 
 from ..models.inventory_commitment import InventoryCommitment, CommitmentType, CommitmentStatus
 from ..models.device import Device, DeviceStatus, DeviceCategory
 from ..models.warehouse import Warehouse, WarehouseStatus
-from ..models.contract import Contract, ContractStatus, ContractItem
-from ..models.reservation import Reservation, ReservationStatus
-from ..models.device_lock import DeviceLock
-from ..models.repair import RepairRecord, RepairStatus
-from ..models.disinfection import DisinfectionRecord
-from ..models.device_transfer import DeviceTransfer, TransferStatus
 from ..models.user import User
-from ..config import settings
+from .inventory_availability import AvailabilityChecker
 
 
 class InventoryCommitmentService:
     def __init__(self, db: Session):
         self.db = db
+        self.availability_checker = AvailabilityChecker(db)
 
     def _cleanup_expired_commitments(self):
         now = datetime.now(timezone.utc)
@@ -36,169 +30,6 @@ class InventoryCommitmentService:
             c.status = CommitmentStatus.EXPIRED
         if expired:
             self.db.commit()
-
-    def _get_unavailable_device_ids_from_contracts(
-        self, category_id: int, start_date: datetime, end_date: datetime, warehouse_id: Optional[int] = None
-    ) -> List[int]:
-        query = (
-            self.db.query(Device.id)
-            .join(ContractItem, ContractItem.device_id == Device.id)
-            .join(Contract, Contract.id == ContractItem.contract_id)
-            .filter(
-                Device.category_id == category_id,
-                Contract.status.in_([ContractStatus.ACTIVE, ContractStatus.RENEWED, ContractStatus.OVERDUE]),
-                or_(
-                    and_(Contract.start_date < end_date, Contract.end_date > start_date),
-                    and_(start_date < Contract.end_date, end_date > Contract.start_date),
-                ),
-            )
-        )
-        if warehouse_id:
-            query = query.filter(
-                or_(
-                    Device.warehouse_id == warehouse_id,
-                    Device.location == select(Warehouse.code).where(Warehouse.id == warehouse_id).scalar_subquery(),
-                )
-            )
-        return [row[0] for row in query.all()]
-
-    def _get_unavailable_device_ids_from_reservations(
-        self, category_id: int, start_date: datetime, end_date: datetime, warehouse_id: Optional[int] = None
-    ) -> List[int]:
-        query = (
-            self.db.query(Device.id)
-            .join(Reservation, Reservation.device_id == Device.id)
-            .filter(
-                Device.category_id == category_id,
-                Reservation.status.in_([ReservationStatus.PENDING, ReservationStatus.CONFIRMED]),
-                or_(
-                    and_(Reservation.start_date < end_date, Reservation.end_date > start_date),
-                    and_(start_date < Reservation.end_date, end_date > Reservation.start_date),
-                ),
-            )
-        )
-        if warehouse_id:
-            query = query.filter(
-                or_(
-                    Device.warehouse_id == warehouse_id,
-                    Device.location == select(Warehouse.code).where(Warehouse.id == warehouse_id).scalar_subquery(),
-                )
-            )
-        return [row[0] for row in query.all()]
-
-    def _get_unavailable_device_ids_from_locks(
-        self, category_id: int, warehouse_id: Optional[int] = None
-    ) -> List[int]:
-        now = datetime.now(timezone.utc)
-        query = (
-            self.db.query(Device.id)
-            .join(DeviceLock, DeviceLock.device_id == Device.id)
-            .filter(
-                Device.category_id == category_id,
-                DeviceLock.is_active == 1,
-                DeviceLock.expires_at > now,
-            )
-        )
-        if warehouse_id:
-            query = query.filter(
-                or_(
-                    Device.warehouse_id == warehouse_id,
-                    Device.location == select(Warehouse.code).where(Warehouse.id == warehouse_id).scalar_subquery(),
-                )
-            )
-        return [row[0] for row in query.all()]
-
-    def _get_unavailable_device_ids_from_repairs(
-        self, category_id: int, end_date: datetime, warehouse_id: Optional[int] = None
-    ) -> List[int]:
-        query = (
-            self.db.query(Device.id)
-            .join(RepairRecord, RepairRecord.device_id == Device.id)
-            .filter(
-                Device.category_id == category_id,
-                RepairRecord.status.notin_(["completed", "cancelled", "unrepairable"]),
-                or_(
-                    RepairRecord.repair_complete_date.is_(None),
-                    RepairRecord.repair_complete_date > end_date,
-                ),
-            )
-        )
-        if warehouse_id:
-            query = query.filter(
-                or_(
-                    Device.warehouse_id == warehouse_id,
-                    Device.location == select(Warehouse.code).where(Warehouse.id == warehouse_id).scalar_subquery(),
-                )
-            )
-        return [row[0] for row in query.all()]
-
-    def _get_unavailable_device_ids_from_disinfection(
-        self, category_id: int, warehouse_id: Optional[int] = None
-    ) -> List[int]:
-        query = self.db.query(Device.id).filter(
-            Device.category_id == category_id,
-            Device.status == DeviceStatus.DISINFECTION,
-        )
-        if warehouse_id:
-            query = query.filter(
-                or_(
-                    Device.warehouse_id == warehouse_id,
-                    Device.location == select(Warehouse.code).where(Warehouse.id == warehouse_id).scalar_subquery(),
-                )
-            )
-        return [row[0] for row in query.all()]
-
-    def _get_unavailable_device_ids_from_transfers(
-        self, category_id: int, start_date: datetime, end_date: datetime, warehouse_id: Optional[int] = None
-    ) -> List[int]:
-        query = (
-            self.db.query(Device.id)
-            .join(DeviceTransfer, DeviceTransfer.device_id == Device.id)
-            .filter(
-                Device.category_id == category_id,
-                DeviceTransfer.status.in_([TransferStatus.PENDING, TransferStatus.CONFIRMED, TransferStatus.IN_TRANSIT]),
-                or_(
-                    DeviceTransfer.completed_at.is_(None),
-                    DeviceTransfer.completed_at > start_date,
-                ),
-                or_(
-                    DeviceTransfer.cancelled_at.is_(None),
-                    DeviceTransfer.cancelled_at > start_date,
-                ),
-                or_(
-                    and_(DeviceTransfer.created_at < end_date, DeviceTransfer.completed_at.is_(None)),
-                    and_(DeviceTransfer.created_at < end_date, DeviceTransfer.completed_at > start_date),
-                ),
-            )
-        )
-        if warehouse_id:
-            warehouse_code_subquery = select(Warehouse.code).where(Warehouse.id == warehouse_id).scalar_subquery()
-            query = query.filter(
-                or_(
-                    DeviceTransfer.to_location == warehouse_code_subquery,
-                    DeviceTransfer.from_location == warehouse_code_subquery,
-                )
-            )
-        return [row[0] for row in query.all()]
-
-    def _get_unavailable_device_ids_from_commitments(
-        self, category_id: int, start_date: datetime, end_date: datetime, warehouse_id: Optional[int] = None
-    ) -> List[int]:
-        self._cleanup_expired_commitments()
-        query = (
-            self.db.query(InventoryCommitment.device_id)
-            .filter(
-                InventoryCommitment.category_id == category_id,
-                InventoryCommitment.status.in_([CommitmentStatus.PENDING, CommitmentStatus.CONFIRMED]),
-                or_(
-                    and_(InventoryCommitment.start_date < end_date, InventoryCommitment.end_date > start_date),
-                    and_(start_date < InventoryCommitment.end_date, end_date > InventoryCommitment.start_date),
-                ),
-            )
-        )
-        if warehouse_id:
-            query = query.filter(InventoryCommitment.warehouse_id == warehouse_id)
-        return [row[0] for row in query.all()]
 
     def get_available_to_promise(
         self,
@@ -229,53 +60,33 @@ class InventoryCommitmentService:
         if warehouse_id:
             warehouse_code = warehouse.code if warehouse else None
             base_query = base_query.filter(
-                or_(
-                    Device.warehouse_id == warehouse_id,
-                    Device.location == warehouse_code,
-                )
+                (Device.warehouse_id == warehouse_id) | (Device.location == warehouse_code)
             )
 
         total_in_warehouse = base_query.count()
 
-        contract_unavailable = set(
-            self._get_unavailable_device_ids_from_contracts(category_id, start_date, end_date, warehouse_id)
-        )
-        reservation_unavailable = set(
-            self._get_unavailable_device_ids_from_reservations(category_id, start_date, end_date, warehouse_id)
-        )
-        lock_unavailable = set(self._get_unavailable_device_ids_from_locks(category_id, warehouse_id))
-        repair_unavailable = set(self._get_unavailable_device_ids_from_repairs(category_id, end_date, warehouse_id))
-        disinfection_unavailable = set(self._get_unavailable_device_ids_from_disinfection(category_id, warehouse_id))
-        transfer_unavailable = set(
-            self._get_unavailable_device_ids_from_transfers(category_id, start_date, end_date, warehouse_id)
-        )
-        commitment_unavailable = set(
-            self._get_unavailable_device_ids_from_commitments(category_id, start_date, end_date, warehouse_id)
+        all_unavailable, source_breakdown, contract_ids, reservation_ids, commitment_ids = (
+            self.availability_checker.get_unavailable_device_ids(
+                category_id=category_id,
+                start_date=start_date,
+                end_date=end_date,
+                warehouse_id=warehouse_id,
+            )
         )
 
-        all_unavailable = (
-            contract_unavailable
-            | reservation_unavailable
-            | lock_unavailable
-            | repair_unavailable
-            | disinfection_unavailable
-            | transfer_unavailable
-            | commitment_unavailable
-        )
-
-        committed_quantity = len(commitment_unavailable | contract_unavailable | reservation_unavailable)
+        committed_quantity = len(commitment_ids | contract_ids | reservation_ids)
         available = total_in_warehouse - len(all_unavailable)
         available = max(0, available)
 
         breakdown = {
             "total_in_warehouse": total_in_warehouse,
-            "contracts": len(contract_unavailable),
-            "reservations": len(reservation_unavailable),
-            "locks": len(lock_unavailable),
-            "repairs": len(repair_unavailable),
-            "disinfection": len(disinfection_unavailable),
-            "transfers": len(transfer_unavailable),
-            "other_commitments": len(commitment_unavailable),
+            "contracts": source_breakdown.get("contracts", 0),
+            "reservations": source_breakdown.get("reservations", 0),
+            "locks": source_breakdown.get("locks", 0),
+            "repairs": source_breakdown.get("repairs", 0),
+            "disinfection": source_breakdown.get("disinfection", 0),
+            "transfers": source_breakdown.get("transfers", 0),
+            "other_commitments": source_breakdown.get("other_commitments", 0),
             "unavailable_unique": len(all_unavailable),
         }
 
@@ -290,132 +101,14 @@ class InventoryCommitmentService:
         exclude_commitment_id: Optional[int] = None,
         exclude_user_id: Optional[int] = None,
     ) -> Tuple[bool, List[str]]:
-        device = self.db.query(Device).filter(Device.id == device_id).with_for_update().first()
-        if not device:
-            return False, [f"Device {device_id} not found"]
-
-        if device.status == DeviceStatus.RETIRED:
-            return False, [f"Device {device_id} is retired"]
-
-        warehouse = self.db.query(Warehouse).filter(Warehouse.id == warehouse_id).first()
-        if not warehouse or not warehouse.is_active():
-            return False, [f"Warehouse {warehouse_id} not found or inactive"]
-
-        device_warehouse_match = (
-            device.warehouse_id == warehouse_id
-            or device.location == warehouse.code
-            or (device.location and device.location.startswith(warehouse.code))
+        return self.availability_checker.check_device_available(
+            device_id=device_id,
+            warehouse_id=warehouse_id,
+            start_date=start_date,
+            end_date=end_date,
+            exclude_commitment_id=exclude_commitment_id,
+            exclude_user_id=exclude_user_id,
         )
-        if not device_warehouse_match:
-            return False, [f"Device {device_id} is not in warehouse {warehouse.code}"]
-
-        errors = []
-
-        now = datetime.now(timezone.utc)
-        conflicting_contract = (
-            self.db.query(ContractItem)
-            .join(Contract, Contract.id == ContractItem.contract_id)
-            .filter(
-                ContractItem.device_id == device_id,
-                Contract.status.in_([ContractStatus.ACTIVE, ContractStatus.RENEWED, ContractStatus.OVERDUE]),
-                or_(
-                    and_(Contract.start_date < end_date, Contract.end_date > start_date),
-                    and_(start_date < Contract.end_date, end_date > Contract.start_date),
-                ),
-            )
-            .first()
-        )
-        if conflicting_contract:
-            errors.append(f"Device {device_id} has conflicting contract")
-
-        conflicting_reservation = (
-            self.db.query(Reservation)
-            .filter(
-                Reservation.device_id == device_id,
-                Reservation.status.in_([ReservationStatus.PENDING, ReservationStatus.CONFIRMED]),
-                or_(
-                    and_(Reservation.start_date < end_date, Reservation.end_date > start_date),
-                    and_(start_date < Reservation.end_date, end_date > Reservation.start_date),
-                ),
-            )
-            .first()
-        )
-        if conflicting_reservation:
-            errors.append(f"Device {device_id} has conflicting reservation")
-
-        lock_query = self.db.query(DeviceLock).filter(
-            DeviceLock.device_id == device_id,
-            DeviceLock.is_active == 1,
-            DeviceLock.expires_at > now,
-        )
-        if exclude_user_id:
-            lock_query = lock_query.filter(DeviceLock.user_id != exclude_user_id)
-        active_lock = lock_query.first()
-        if active_lock:
-            errors.append(f"Device {device_id} is currently locked")
-
-        active_repair = (
-            self.db.query(RepairRecord)
-            .filter(
-                RepairRecord.device_id == device_id,
-                RepairRecord.status.notin_(["completed", "cancelled", "unrepairable"]),
-                or_(
-                    RepairRecord.repair_complete_date.is_(None),
-                    RepairRecord.repair_complete_date > end_date,
-                ),
-            )
-            .first()
-        )
-        if active_repair:
-            errors.append(f"Device {device_id} is in repair")
-
-        if device.status == DeviceStatus.DISINFECTION:
-            errors.append(f"Device {device_id} is in disinfection")
-
-        conflicting_transfer = (
-            self.db.query(DeviceTransfer)
-            .filter(
-                DeviceTransfer.device_id == device_id,
-                DeviceTransfer.status.in_([TransferStatus.PENDING, TransferStatus.CONFIRMED, TransferStatus.IN_TRANSIT]),
-                or_(
-                    DeviceTransfer.from_location == warehouse.code,
-                    DeviceTransfer.to_location == warehouse.code,
-                ),
-                or_(
-                    DeviceTransfer.completed_at.is_(None),
-                    DeviceTransfer.completed_at > start_date,
-                ),
-                or_(
-                    DeviceTransfer.cancelled_at.is_(None),
-                    DeviceTransfer.cancelled_at > start_date,
-                ),
-                or_(
-                    and_(DeviceTransfer.created_at < end_date, DeviceTransfer.completed_at.is_(None)),
-                    and_(DeviceTransfer.created_at < end_date, DeviceTransfer.completed_at > start_date),
-                ),
-            )
-            .with_for_update()
-            .first()
-        )
-        if conflicting_transfer:
-            errors.append(f"Device {device_id} is in transfer during this period")
-
-        self._cleanup_expired_commitments()
-        commitment_query = self.db.query(InventoryCommitment).filter(
-            InventoryCommitment.device_id == device_id,
-            InventoryCommitment.status.in_([CommitmentStatus.PENDING, CommitmentStatus.CONFIRMED]),
-            or_(
-                and_(InventoryCommitment.start_date < end_date, InventoryCommitment.end_date > start_date),
-                and_(start_date < InventoryCommitment.end_date, end_date > InventoryCommitment.start_date),
-            ),
-        )
-        if exclude_commitment_id:
-            commitment_query = commitment_query.filter(InventoryCommitment.id != exclude_commitment_id)
-        conflicting_commitment = commitment_query.with_for_update().first()
-        if conflicting_commitment:
-            errors.append(f"Device {device_id} has conflicting inventory commitment")
-
-        return len(errors) == 0, errors
 
     def _check_duplicate_commitment(
         self,
