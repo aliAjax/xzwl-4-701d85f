@@ -7,7 +7,7 @@ Creates seed data including default admin user, categories, and devices
 import sys
 from datetime import datetime, timedelta, timezone
 
-from app.database import Base, engine, SessionLocal
+from app.database import Base, engine, SessionLocal, ensure_database_compatibility
 from app.models import (
     User, UserRole,
     Device, DeviceStatus, DeviceCategory,
@@ -24,6 +24,7 @@ from app.core import get_password_hash
 def init_database():
     print("Creating database tables...")
     Base.metadata.create_all(bind=engine)
+    ensure_database_compatibility()
 
     db = SessionLocal()
 

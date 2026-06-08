@@ -1,4 +1,4 @@
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, inspect, text
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker
 from typing import Generator
@@ -14,6 +14,22 @@ engine = create_engine(settings.DATABASE_URL, connect_args=connect_args)
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
 Base = declarative_base()
+
+
+def ensure_database_compatibility() -> None:
+    inspector = inspect(engine)
+    if "device_imports" not in inspector.get_table_names():
+        return
+
+    columns = {column["name"] for column in inspector.get_columns("device_imports")}
+    if "skipped_count" not in columns:
+        with engine.begin() as connection:
+            connection.execute(
+                text(
+                    "ALTER TABLE device_imports "
+                    "ADD COLUMN skipped_count INTEGER NOT NULL DEFAULT 0"
+                )
+            )
 
 
 def get_db() -> Generator:

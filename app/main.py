@@ -6,7 +6,7 @@ from sqlalchemy import func
 from datetime import datetime, timezone
 
 from .config import settings
-from .database import engine, Base, SessionLocal
+from .database import engine, Base, SessionLocal, ensure_database_compatibility
 from .routers import (
     auth_router,
     users_router,
@@ -36,6 +36,7 @@ from .models.contract import Contract, ContractStatus
 from .models.device import DeviceStatus
 
 Base.metadata.create_all(bind=engine)
+ensure_database_compatibility()
 
 app = FastAPI(
     title=settings.APP_NAME,
