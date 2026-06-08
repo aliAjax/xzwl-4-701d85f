@@ -187,16 +187,18 @@ async def create_contract(
         warehouse_id = device.warehouse_id
         if warehouse_id is None:
             if device.location:
-                warehouse = (
+                active_warehouses = (
                     db.query(Warehouse)
-                    .filter(
-                        Warehouse.status == "active",
-                        or_(
-                            Warehouse.code == device.location,
-                            device.location.like(Warehouse.code + "%"),
-                        ),
-                    )
-                    .first()
+                    .filter(Warehouse.status == "active")
+                    .order_by(Warehouse.code.desc())
+                    .all()
+                )
+                warehouse = next(
+                    (
+                        w for w in active_warehouses
+                        if device.location == w.code or device.location.startswith(w.code)
+                    ),
+                    None,
                 )
                 if warehouse:
                     warehouse_id = warehouse.id

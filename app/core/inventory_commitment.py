@@ -304,6 +304,7 @@ class InventoryCommitmentService:
         device_warehouse_match = (
             device.warehouse_id == warehouse_id
             or device.location == warehouse.code
+            or (device.location and device.location.startswith(warehouse.code))
         )
         if not device_warehouse_match:
             return False, [f"Device {device_id} is not in warehouse {warehouse.code}"]
