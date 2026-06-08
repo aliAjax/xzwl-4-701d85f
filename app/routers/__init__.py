@@ -17,3 +17,4 @@ from .customer_credit_notes import router as customer_credit_notes_router
 from .device_imports import router as device_imports_router
 from .device_swaps import router as device_swaps_router
 from .handovers import router as handovers_router
+from .pricing_rules import router as pricing_rules_router
