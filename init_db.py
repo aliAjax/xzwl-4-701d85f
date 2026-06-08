@@ -3,12 +3,13 @@
 Database seed data initialization script for Medical Equipment Rental System.
 
 Usage:
-    python init_db.py              # Initialize seed data if not exists
+    python init_db.py              # Run migrations, then seed data if not exists
     python init_db.py --seed-only  # Only add seed data, skip migration check
     python init_db.py --reset      # Drop all tables, run migrations, then seed
     python init_db.py --migrate    # Run migrations only, no seed data
 
-Note: Table creation is handled by Alembic migrations. This script only adds seed data.
+Note: Table creation is handled by Alembic migrations. This script orchestrates
+migration execution and repeatable seed data insertion for local setup.
 """
 
 import sys
@@ -504,10 +505,7 @@ def main():
             run_migrations()
             return
         elif not args.seed_only:
-            if not check_migrations_current():
-                print("Error: Database is not up to date with migrations.")
-                print("Run 'python init_db.py --migrate' first, or use --seed-only to skip check.")
-                sys.exit(1)
+            run_migrations()
 
         db = SessionLocal()
         try:
