@@ -71,3 +71,10 @@ from .device_import import (
     ImportItemPreview,
     ValidationErrorDetail,
 )
+from .device_swap import (
+    DeviceSwapCreate,
+    DeviceSwapPreviewRequest,
+    DeviceSwapPreviewResponse,
+    DeviceSwapCancel,
+    DeviceSwapResponse,
+)

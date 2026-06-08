@@ -33,6 +33,9 @@ class AuditAction(str, enum.Enum):
     TRANSFER_CREATE = "transfer_create"
     TRANSFER_CONFIRM = "transfer_confirm"
     TRANSFER_CANCEL = "transfer_cancel"
+    SWAP_CREATE = "swap_create"
+    SWAP_COMPLETE = "swap_complete"
+    SWAP_CANCEL = "swap_cancel"
 
 
 class AuditLog(Base):

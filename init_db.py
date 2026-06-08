@@ -11,11 +11,12 @@ from app.database import Base, engine, SessionLocal
 from app.models import (
     User, UserRole,
     Device, DeviceStatus, DeviceCategory,
-    Contract, ContractStatus,
+    Contract, ContractItem, ContractStatus,
     DisinfectionRecord,
     MaintenanceRecord,
     RepairRecord,
     Deposit, DepositStatus,
+    DeviceSwap, DeviceSwapStatus,
 )
 from app.core import get_password_hash
 
@@ -228,6 +229,36 @@ def init_database():
                 last_maintenance_date=datetime.now(timezone.utc) - timedelta(days=25),
                 next_maintenance_date=datetime.now(timezone.utc) + timedelta(days=5),
             ),
+            Device(
+                serial_number="DEV-OXY-005",
+                name="医用氧气机 5L",
+                model="OXY-5000",
+                manufacturer="MedicalTech Inc.",
+                purchase_date=datetime(2023, 7, 10, tzinfo=timezone.utc),
+                purchase_price=8500.0,
+                current_owner="公司",
+                location="A仓库-1区",
+                status=DeviceStatus.AVAILABLE,
+                category_id=categories[0].id,
+                last_disinfection_date=datetime.now(timezone.utc) - timedelta(days=3),
+                last_maintenance_date=datetime.now(timezone.utc) - timedelta(days=10),
+                next_maintenance_date=datetime.now(timezone.utc) + timedelta(days=20),
+            ),
+            Device(
+                serial_number="DEV-OXY-006",
+                name="医用氧气机 5L",
+                model="OXY-5000",
+                manufacturer="MedicalTech Inc.",
+                purchase_date=datetime(2023, 8, 15, tzinfo=timezone.utc),
+                purchase_price=8500.0,
+                current_owner="公司",
+                location="A仓库-1区",
+                status=DeviceStatus.AVAILABLE,
+                category_id=categories[0].id,
+                last_disinfection_date=datetime.now(timezone.utc) - timedelta(days=1),
+                last_maintenance_date=datetime.now(timezone.utc) - timedelta(days=5),
+                next_maintenance_date=datetime.now(timezone.utc) + timedelta(days=25),
+            ),
         ]
         db.add_all(devices)
         db.flush()
@@ -316,6 +347,18 @@ def init_database():
         db.add(sample_contract)
         db.flush()
 
+        print("Creating sample contract items...")
+        contract_item = ContractItem(
+            contract_id=sample_contract.id,
+            device_id=devices[6].id,
+            daily_rate=50.0,
+            quantity=1,
+            subtotal=1500.0,
+            notes="客户租赁的医用氧气机",
+        )
+        db.add(contract_item)
+        db.flush()
+
         print("Creating sample deposit...")
         deposit = Deposit(
             contract_id=sample_contract.id,
@@ -357,6 +400,7 @@ def init_database():
         print(f"  - {len(disinfection_records)} disinfection records")
         print(f"  - {len(maintenance_records)} maintenance records")
         print(f"  - 1 active contract (contract: {contract_number})")
+        print(f"  - 1 contract item")
         print(f"  - 1 deposit record")
         print(f"  - 1 repair record")
         print("\nAPI Documentation:")

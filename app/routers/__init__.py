@@ -15,3 +15,4 @@ from .quotations import router as quotations_router
 from .device_transfers import router as device_transfers_router
 from .customer_credit_notes import router as customer_credit_notes_router
 from .device_imports import router as device_imports_router
+from .device_swaps import router as device_swaps_router
