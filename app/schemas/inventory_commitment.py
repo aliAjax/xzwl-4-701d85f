@@ -48,6 +48,7 @@ class InventoryCommitmentUpdate(BaseModel):
 class InventoryCommitmentResponse(BaseModel):
     id: int
     commitment_token: str
+    batch_token: Optional[str] = None
     device_id: int
     warehouse_id: int
     warehouse: Optional[WarehouseResponse] = None
@@ -69,6 +70,10 @@ class InventoryCommitmentResponse(BaseModel):
 
     class Config:
         from_attributes = True
+
+
+class BatchTokenRequest(BaseModel):
+    batch_token: str
 
 
 class AvailablePromiseQuery(BaseModel):

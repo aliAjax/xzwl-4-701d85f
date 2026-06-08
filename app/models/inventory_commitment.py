@@ -31,6 +31,7 @@ class InventoryCommitment(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     commitment_token = Column(String(100), unique=True, nullable=False, index=True, default=lambda: str(uuid.uuid4()))
+    batch_token = Column(String(100), index=True)
 
     device_id = Column(Integer, ForeignKey("devices.id"), nullable=False, index=True)
     device = relationship("Device", back_populates="inventory_commitments")
@@ -65,6 +66,8 @@ class InventoryCommitment(Base):
     __table_args__ = (
         Index("idx_commitment_device_dates", "device_id", "start_date", "end_date"),
         Index("idx_commitment_warehouse_category", "warehouse_id", "category_id", "status"),
+        Index("idx_commitment_batch_token", "batch_token"),
+        Index("idx_commitment_reference", "reference_type", "reference_id"),
     )
 
     def is_active(self) -> bool:

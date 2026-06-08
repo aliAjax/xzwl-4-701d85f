@@ -184,7 +184,7 @@ async def create_commitments_bulk(
     return APIResponse(message="Bulk commitments created successfully", data=commitments)
 
 
-@router.post("/commit/confirm", response_model=APIResponse[InventoryCommitmentResponse])
+@router.post("/commit/confirm", response_model=APIResponse[List[InventoryCommitmentResponse]])
 @require_role([UserRole.ADMIN, UserRole.STAFF])
 async def confirm_commitment(
     request: Request,
@@ -193,27 +193,63 @@ async def confirm_commitment(
     db: Session = Depends(get_db),
 ):
     service = InventoryCommitmentService(db)
-    success, commitment, errors = service.confirm_commitment(
-        commitment_token=confirm_data.commitment_token,
+    success, commitments, errors = service.confirm_commitment(
+        token=confirm_data.commitment_token,
         user=current_user,
+        is_batch=False,
     )
 
     if not success:
         raise HTTPException(status_code=400, detail="; ".join(errors))
 
     audit_logger = AuditLogger(db)
-    audit_logger.log(
-        action="confirm",
-        resource_type="inventory_commitment",
-        resource_id=confirm_data.commitment_token,
+    for commitment in commitments:
+        audit_logger.log(
+            action="confirm",
+            resource_type="inventory_commitment",
+            resource_id=commitment.commitment_token,
+            user=current_user,
+            old_values={"status": CommitmentStatus.PENDING.value},
+            new_values={"status": CommitmentStatus.CONFIRMED.value},
+            description=f"Commitment {commitment.commitment_token} confirmed",
+            ip_address=request.client.host if request.client else None,
+        )
+
+    return APIResponse(message="Commitment confirmed successfully", data=commitments)
+
+
+@router.post("/commit/batch/confirm", response_model=APIResponse[List[InventoryCommitmentResponse]])
+@require_role([UserRole.ADMIN, UserRole.STAFF])
+async def confirm_commitments_batch(
+    request: Request,
+    confirm_data: BatchTokenRequest,
+    current_user: User = Depends(get_current_active_user),
+    db: Session = Depends(get_db),
+):
+    service = InventoryCommitmentService(db)
+    success, commitments, errors = service.confirm_commitment(
+        token=confirm_data.batch_token,
         user=current_user,
-        old_values={"status": CommitmentStatus.PENDING},
-        new_values={"status": CommitmentStatus.CONFIRMED},
-        description=f"Commitment {confirm_data.commitment_token} confirmed",
-        ip_address=request.client.host if request.client else None,
+        is_batch=True,
     )
 
-    return APIResponse(message="Commitment confirmed successfully", data=commitment)
+    if not success:
+        raise HTTPException(status_code=400, detail="; ".join(errors))
+
+    audit_logger = AuditLogger(db)
+    for commitment in commitments:
+        audit_logger.log(
+            action="confirm",
+            resource_type="inventory_commitment",
+            resource_id=commitment.commitment_token,
+            user=current_user,
+            old_values={"status": CommitmentStatus.PENDING.value},
+            new_values={"status": CommitmentStatus.CONFIRMED.value},
+            description=f"Commitment {commitment.commitment_token} confirmed (batch {confirm_data.batch_token})",
+            ip_address=request.client.host if request.client else None,
+        )
+
+    return APIResponse(message="Batch commitments confirmed successfully", data=commitments)
 
 
 @router.post("/commit/release", response_model=APIResponse)
@@ -226,8 +262,9 @@ async def release_commitment(
 ):
     service = InventoryCommitmentService(db)
     success, errors = service.release_commitment(
-        commitment_token=release_data.commitment_token,
+        token=release_data.commitment_token,
         user=current_user,
+        is_batch=False,
     )
 
     if not success:
@@ -240,12 +277,45 @@ async def release_commitment(
         resource_id=release_data.commitment_token,
         user=current_user,
         old_values={"status": "active"},
-        new_values={"status": CommitmentStatus.CANCELLED},
+        new_values={"status": CommitmentStatus.CANCELLED.value},
         description=f"Commitment {release_data.commitment_token} released",
         ip_address=request.client.host if request.client else None,
     )
 
     return APIResponse(message="Commitment released successfully")
+
+
+@router.post("/commit/batch/release", response_model=APIResponse)
+@require_role([UserRole.ADMIN, UserRole.STAFF])
+async def release_commitments_batch(
+    request: Request,
+    release_data: BatchTokenRequest,
+    current_user: User = Depends(get_current_active_user),
+    db: Session = Depends(get_db),
+):
+    service = InventoryCommitmentService(db)
+    success, errors = service.release_commitment(
+        token=release_data.batch_token,
+        user=current_user,
+        is_batch=True,
+    )
+
+    if not success:
+        raise HTTPException(status_code=400, detail="; ".join(errors))
+
+    audit_logger = AuditLogger(db)
+    audit_logger.log(
+        action="release",
+        resource_type="inventory_commitment",
+        resource_id=release_data.batch_token,
+        user=current_user,
+        old_values={"status": "active"},
+        new_values={"status": CommitmentStatus.CANCELLED.value},
+        description=f"Batch commitments {release_data.batch_token} released",
+        ip_address=request.client.host if request.client else None,
+    )
+
+    return APIResponse(message="Batch commitments released successfully")
 
 
 @router.post("/commit/complete", response_model=APIResponse)
@@ -258,8 +328,9 @@ async def complete_commitment(
 ):
     service = InventoryCommitmentService(db)
     success, errors = service.complete_commitment(
-        commitment_token=complete_data.commitment_token,
+        token=complete_data.commitment_token,
         user=current_user,
+        is_batch=False,
     )
 
     if not success:
@@ -271,13 +342,46 @@ async def complete_commitment(
         resource_type="inventory_commitment",
         resource_id=complete_data.commitment_token,
         user=current_user,
-        old_values={"status": CommitmentStatus.CONFIRMED},
-        new_values={"status": CommitmentStatus.COMPLETED},
+        old_values={"status": CommitmentStatus.CONFIRMED.value},
+        new_values={"status": CommitmentStatus.COMPLETED.value},
         description=f"Commitment {complete_data.commitment_token} completed",
         ip_address=request.client.host if request.client else None,
     )
 
     return APIResponse(message="Commitment completed successfully")
+
+
+@router.post("/commit/batch/complete", response_model=APIResponse)
+@require_role([UserRole.ADMIN, UserRole.STAFF])
+async def complete_commitments_batch(
+    request: Request,
+    complete_data: BatchTokenRequest,
+    current_user: User = Depends(get_current_active_user),
+    db: Session = Depends(get_db),
+):
+    service = InventoryCommitmentService(db)
+    success, errors = service.complete_commitment(
+        token=complete_data.batch_token,
+        user=current_user,
+        is_batch=True,
+    )
+
+    if not success:
+        raise HTTPException(status_code=400, detail="; ".join(errors))
+
+    audit_logger = AuditLogger(db)
+    audit_logger.log(
+        action="complete",
+        resource_type="inventory_commitment",
+        resource_id=complete_data.batch_token,
+        user=current_user,
+        old_values={"status": CommitmentStatus.CONFIRMED.value},
+        new_values={"status": CommitmentStatus.COMPLETED.value},
+        description=f"Batch commitments {complete_data.batch_token} completed",
+        ip_address=request.client.host if request.client else None,
+    )
+
+    return APIResponse(message="Batch commitments completed successfully")
 
 
 @router.get("/commit/{commitment_token}", response_model=APIResponse[InventoryCommitmentResponse])
@@ -290,6 +394,23 @@ async def get_commitment(commitment_token: str, db: Session = Depends(get_db)):
     response_data = {c.name: getattr(commitment, c.name) for c in commitment.__table__.columns}
     response_data["warehouse"] = commitment.warehouse
     response_data["category"] = commitment.category
+
+    return APIResponse(data=response_data)
+
+
+@router.get("/commit/batch/{batch_token}", response_model=APIResponse[List[InventoryCommitmentResponse]])
+async def get_commitments_by_batch(batch_token: str, db: Session = Depends(get_db)):
+    service = InventoryCommitmentService(db)
+    commitments = service.get_commitments_by_batch(batch_token)
+    if not commitments:
+        raise HTTPException(status_code=404, detail="Batch commitments not found")
+
+    response_data = []
+    for c in commitments:
+        c_dict = {col.name: getattr(c, col.name) for col in c.__table__.columns}
+        c_dict["warehouse"] = c.warehouse
+        c_dict["category"] = c.category
+        response_data.append(c_dict)
 
     return APIResponse(data=response_data)
 

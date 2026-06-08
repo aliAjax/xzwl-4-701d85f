@@ -16,6 +16,8 @@ class TransferLocationType(str, enum.Enum):
 class TransferStatus(str, enum.Enum):
     PENDING = "pending"
     CONFIRMED = "confirmed"
+    IN_TRANSIT = "in_transit"
+    COMPLETED = "completed"
     CANCELLED = "cancelled"
 
 
@@ -42,6 +44,10 @@ class DeviceTransfer(Base):
     confirmed_by_id = Column(Integer, ForeignKey("users.id"))
     confirmed_by = relationship("User", foreign_keys=[confirmed_by_id])
     confirmed_at = Column(DateTime(timezone=True))
+
+    completed_by_id = Column(Integer, ForeignKey("users.id"))
+    completed_by = relationship("User", foreign_keys=[completed_by_id])
+    completed_at = Column(DateTime(timezone=True))
 
     cancelled_by_id = Column(Integer, ForeignKey("users.id"))
     cancelled_by = relationship("User", foreign_keys=[cancelled_by_id])

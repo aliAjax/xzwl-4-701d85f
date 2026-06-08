@@ -156,17 +156,27 @@ class InventoryCommitmentService:
             .join(DeviceTransfer, DeviceTransfer.device_id == Device.id)
             .filter(
                 Device.category_id == category_id,
-                DeviceTransfer.status == TransferStatus.CONFIRMED,
+                DeviceTransfer.status.in_([TransferStatus.CONFIRMED, TransferStatus.IN_TRANSIT]),
                 or_(
-                    and_(DeviceTransfer.created_at < end_date, start_date < DeviceTransfer.created_at),
+                    DeviceTransfer.completed_at.is_(None),
+                    DeviceTransfer.completed_at > start_date,
+                ),
+                or_(
+                    DeviceTransfer.cancelled_at.is_(None),
+                    DeviceTransfer.cancelled_at > start_date,
+                ),
+                or_(
+                    and_(DeviceTransfer.created_at < end_date, DeviceTransfer.completed_at.is_(None)),
+                    and_(DeviceTransfer.created_at < end_date, DeviceTransfer.completed_at > start_date),
                 ),
             )
         )
         if warehouse_id:
+            warehouse_code_subquery = select(Warehouse.code).where(Warehouse.id == warehouse_id).scalar_subquery()
             query = query.filter(
                 or_(
-                    DeviceTransfer.to_location == select(Warehouse.code).where(Warehouse.id == warehouse_id).scalar_subquery(),
-                    DeviceTransfer.from_location == select(Warehouse.code).where(Warehouse.id == warehouse_id).scalar_subquery(),
+                    DeviceTransfer.to_location == warehouse_code_subquery,
+                    DeviceTransfer.from_location == warehouse_code_subquery,
                 )
             )
         return [row[0] for row in query.all()]
@@ -365,13 +375,25 @@ class InventoryCommitmentService:
             self.db.query(DeviceTransfer)
             .filter(
                 DeviceTransfer.device_id == device_id,
-                DeviceTransfer.status == TransferStatus.CONFIRMED,
+                DeviceTransfer.status.in_([TransferStatus.CONFIRMED, TransferStatus.IN_TRANSIT]),
                 or_(
                     DeviceTransfer.from_location == warehouse.code,
                     DeviceTransfer.to_location == warehouse.code,
                 ),
-                and_(DeviceTransfer.created_at < end_date, start_date < DeviceTransfer.created_at),
+                or_(
+                    DeviceTransfer.completed_at.is_(None),
+                    DeviceTransfer.completed_at > start_date,
+                ),
+                or_(
+                    DeviceTransfer.cancelled_at.is_(None),
+                    DeviceTransfer.cancelled_at > start_date,
+                ),
+                or_(
+                    and_(DeviceTransfer.created_at < end_date, DeviceTransfer.completed_at.is_(None)),
+                    and_(DeviceTransfer.created_at < end_date, DeviceTransfer.completed_at > start_date),
+                ),
             )
+            .with_for_update()
             .first()
         )
         if conflicting_transfer:
@@ -460,8 +482,13 @@ class InventoryCommitmentService:
     ) -> Tuple[bool, List[InventoryCommitment], List[str]]:
         self.db.begin_nested()
         try:
+            unique_device_ids = list(set(device_ids))
+            if len(unique_device_ids) != len(device_ids):
+                self.db.rollback()
+                return False, [], ["Duplicate device IDs in request"]
+
             all_errors = []
-            for device_id in device_ids:
+            for device_id in unique_device_ids:
                 is_available, errors = self._check_device_available(
                     device_id, warehouse_id, start_date, end_date
                 )
@@ -472,13 +499,14 @@ class InventoryCommitmentService:
                 self.db.rollback()
                 return False, [], all_errors
 
-            commitment_token = str(uuid.uuid4())
+            batch_token = str(uuid.uuid4())
             expires_at = datetime.now(timezone.utc) + timedelta(minutes=expires_minutes)
             commitments = []
 
-            for device_id in device_ids:
+            for device_id in unique_device_ids:
                 commitment = InventoryCommitment(
-                    commitment_token=commitment_token,
+                    commitment_token=str(uuid.uuid4()),
+                    batch_token=batch_token,
                     device_id=device_id,
                     warehouse_id=warehouse_id,
                     category_id=category_id,
@@ -504,20 +532,24 @@ class InventoryCommitmentService:
             self.db.rollback()
             raise e
 
-    def confirm_commitment(self, commitment_token: str, user: User) -> Tuple[bool, Optional[InventoryCommitment], List[str]]:
+    def confirm_commitment(
+        self, token: str, user: User, is_batch: bool = False
+    ) -> Tuple[bool, Optional[List[InventoryCommitment]], List[str]]:
         self.db.begin_nested()
         try:
             self._cleanup_expired_commitments()
             now = datetime.now(timezone.utc)
 
-            commitments = (
-                self.db.query(InventoryCommitment)
-                .filter(
-                    InventoryCommitment.commitment_token == commitment_token,
-                    InventoryCommitment.status == CommitmentStatus.PENDING,
-                )
-                .all()
+            query = self.db.query(InventoryCommitment).filter(
+                InventoryCommitment.status == CommitmentStatus.PENDING,
             )
+
+            if is_batch:
+                query = query.filter(InventoryCommitment.batch_token == token)
+            else:
+                query = query.filter(InventoryCommitment.commitment_token == token)
+
+            commitments = query.with_for_update().all()
 
             if not commitments:
                 self.db.rollback()
@@ -556,24 +588,28 @@ class InventoryCommitmentService:
 
             self.db.commit()
 
-            return True, commitments[0] if len(commitments) == 1 else None, []
+            return True, commitments, []
         except Exception as e:
             self.db.rollback()
             raise e
 
-    def release_commitment(self, commitment_token: str, user: User) -> Tuple[bool, List[str]]:
+    def release_commitment(
+        self, token: str, user: User, is_batch: bool = False
+    ) -> Tuple[bool, List[str]]:
         self.db.begin_nested()
         try:
             now = datetime.now(timezone.utc)
 
-            commitments = (
-                self.db.query(InventoryCommitment)
-                .filter(
-                    InventoryCommitment.commitment_token == commitment_token,
-                    InventoryCommitment.status.in_([CommitmentStatus.PENDING, CommitmentStatus.CONFIRMED]),
-                )
-                .all()
+            query = self.db.query(InventoryCommitment).filter(
+                InventoryCommitment.status.in_([CommitmentStatus.PENDING, CommitmentStatus.CONFIRMED]),
             )
+
+            if is_batch:
+                query = query.filter(InventoryCommitment.batch_token == token)
+            else:
+                query = query.filter(InventoryCommitment.commitment_token == token)
+
+            commitments = query.with_for_update().all()
 
             if not commitments:
                 return True, []
@@ -598,19 +634,23 @@ class InventoryCommitmentService:
             self.db.rollback()
             raise e
 
-    def complete_commitment(self, commitment_token: str, user: User) -> Tuple[bool, List[str]]:
+    def complete_commitment(
+        self, token: str, user: User, is_batch: bool = False
+    ) -> Tuple[bool, List[str]]:
         self.db.begin_nested()
         try:
             now = datetime.now(timezone.utc)
 
-            commitments = (
-                self.db.query(InventoryCommitment)
-                .filter(
-                    InventoryCommitment.commitment_token == commitment_token,
-                    InventoryCommitment.status == CommitmentStatus.CONFIRMED,
-                )
-                .all()
+            query = self.db.query(InventoryCommitment).filter(
+                InventoryCommitment.status == CommitmentStatus.CONFIRMED,
             )
+
+            if is_batch:
+                query = query.filter(InventoryCommitment.batch_token == token)
+            else:
+                query = query.filter(InventoryCommitment.commitment_token == token)
+
+            commitments = query.with_for_update().all()
 
             if not commitments:
                 return False, ["No confirmed commitments found"]
@@ -623,6 +663,15 @@ class InventoryCommitmentService:
         except Exception as e:
             self.db.rollback()
             raise e
+
+    def get_commitments_by_batch(self, batch_token: str) -> List[InventoryCommitment]:
+        self._cleanup_expired_commitments()
+        return (
+            self.db.query(InventoryCommitment)
+            .filter(InventoryCommitment.batch_token == batch_token)
+            .order_by(InventoryCommitment.created_at.desc())
+            .all()
+        )
 
     def get_commitment(self, commitment_token: str) -> Optional[InventoryCommitment]:
         self._cleanup_expired_commitments()

@@ -124,6 +124,5 @@ from .inventory_commitment import (
     AvailablePromiseResponse,
     CommitmentConfirmRequest,
     CommitmentReleaseRequest,
-    CommitmentType,
-    CommitmentStatus,
+    BatchTokenRequest,
 )
